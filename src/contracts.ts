@@ -72,6 +72,19 @@ export type ListQuery = {
   cursor?: string;
 };
 
+export type SearchQuery = {
+  /** Plain words; FTS syntax in it is matched as text. The last word also matches as a prefix. */
+  query: string;
+  limit?: number; // default 20, max 100
+  cursor?: string;
+};
+
+export type SearchHit = {
+  artifact: Artifact;
+  /** Plain text around the match, matched terms between « and ». Not HTML: escape it. */
+  snippet: string;
+};
+
 export interface ArtifactService {
   /** Settings-only changes (title/description, no content or files) update in place and make no version. */
   publish(input: PublishInput, publishedBy: string): Promise<PublishResult>;
@@ -85,6 +98,8 @@ export interface ArtifactService {
   ): Promise<{ bytes: Uint8Array; contentType: string } | null>;
   /** Newest updatedAt first; deleted artifacts are left out. */
   list(query?: ListQuery): Promise<Page<Artifact>>;
+  /** Full-text search over title, description and the latest version's text, best match first. */
+  search(query: SearchQuery): Promise<Page<SearchHit>>;
   /** Newest first. Null when the artifact doesn't exist. */
   listVersions(id: string): Promise<Version[] | null>;
   /** Soft delete: hidden everywhere, files kept. False when not found. */

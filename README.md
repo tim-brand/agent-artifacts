@@ -11,6 +11,12 @@ One process serves two hosts, picked by the `Host` header:
 
 Artifacts are stored in a SQLite database and in files under `DATA_DIR`.
 
+## Search
+
+Agents search with the `search_artifacts` MCP tool, people with the search box on the list page (`/?q=`). Both look in the title, the description and the text of the latest version's entry file, best match first. A SQLite FTS5 table (`artifacts_fts`, from Node's bundled SQLite) holds that text and is updated in the same transaction as each publish or delete, so a new version is searchable at once. HTML is indexed as its visible text (no tags, scripts or styles), Markdown and code as they are, and PDFs by title and description only. Each artifact's indexed text is capped at 256 KB.
+
+A query is plain words: every word must match, the last also as a prefix, and accents are ignored. FTS syntax in a query (`AND`, `NEAR`, quotes, `column:`) is matched as text. Snippets mark the matched words with `«` and `»`.
+
 ## Local setup
 
 Needs Node 24 and pnpm 10. There's no build step: Node runs the TypeScript in `src/` directly.

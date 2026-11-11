@@ -1,5 +1,5 @@
 import { html, raw } from 'hono/html';
-import type { Artifact, Format, TokenInfo, Version } from '../contracts.ts';
+import type { Artifact, Format, SearchHit, TokenInfo, Version } from '../contracts.ts';
 import { type Html, layout } from './layout.ts';
 
 export const FORMATS: readonly Format[] = ['html', 'markdown', 'code', 'pdf', 'image'];
@@ -52,6 +52,21 @@ export function messagePage(user: string | null, title: string, message: string)
   });
 }
 
+/** The snippet is escaped like any text; only its «…» match markers become <mark>. */
+export function highlight(snippet: string): Html {
+  const parts = snippet.split(/«([^«»]*)»/);
+  return html`${parts.map((part, i) => (i % 2 === 1 ? html`<mark>${part}</mark>` : part))}`;
+}
+
+const searchBox = (query: string) =>
+  html`<form class="search" method="get" action="/" role="search">
+<input type="search" name="q" value="${query}" placeholder="Search artifacts" maxlength="200" aria-label="Search artifacts">
+<button type="submit">Search</button>
+</form>`;
+
+const versionCount = (a: Artifact) =>
+  html`<span class="meta">${a.latestVersion} version${a.latestVersion === 1 ? '' : 's'}</span>`;
+
 export function listPage(opts: {
   user: string;
   items: Artifact[];
@@ -77,7 +92,7 @@ ${opts.items.map(
   (a) => html`<li>
 <a class="title" href="/a/${encodeURIComponent(a.id)}">${a.title}</a>
 <span class="badge">${a.format}</span>
-<span class="meta">${a.latestVersion} version${a.latestVersion === 1 ? '' : 's'}</span>
+${versionCount(a)}
 <span class="meta">${time(a.updatedAt)}</span>
 </li>`,
 )}
@@ -88,7 +103,43 @@ ${moreHref ? html`<p class="more"><a href="${moreHref}">Load more</a></p>` : ''}
     title: 'Artifacts',
     user: opts.user,
     nav: 'artifacts',
-    body: html`<h1>Artifacts</h1>${chips}${body}`,
+    body: html`<h1>Artifacts</h1>${searchBox('')}${chips}${body}`,
+  });
+}
+
+export function searchPage(opts: {
+  user: string;
+  query: string;
+  hits: SearchHit[];
+  nextCursor: string | null;
+}): Html {
+  const moreHref = opts.nextCursor
+    ? `/?${new URLSearchParams({ q: opts.query, cursor: opts.nextCursor })}`
+    : null;
+
+  const body =
+    opts.hits.length === 0
+      ? html`<div class="empty"><p>Nothing matches <strong>${opts.query}</strong>.</p></div>`
+      : html`<ul class="list">
+${opts.hits.map(
+  ({ artifact: a, snippet }) => html`<li>
+<a class="title" href="/a/${encodeURIComponent(a.id)}">${a.title}</a>
+<span class="badge">${a.format}</span>
+${versionCount(a)}
+<span class="meta">${time(a.updatedAt)}</span>
+${snippet ? html`<p class="hit">${highlight(snippet)}</p>` : ''}
+</li>`,
+)}
+</ul>
+${moreHref ? html`<p class="more"><a href="${moreHref}">More results</a></p>` : ''}`;
+
+  return layout({
+    title: `Search: ${opts.query}`,
+    user: opts.user,
+    nav: 'artifacts',
+    body: html`<h1>Artifacts</h1>${searchBox(opts.query)}
+<p class="muted">Results for <strong>${opts.query}</strong> · <a href="/">Show all</a></p>
+${body}`,
   });
 }
 

@@ -7,6 +7,7 @@ import {
   type ArtifactService,
   type ContentSigner,
   type Deps,
+  type SearchQuery,
   type TokenInfo,
   type TokenService,
   type Version,
@@ -51,6 +52,7 @@ function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<Art
     artifact('i1', 'image', 'A chart'),
   ];
   const deleted: string[] = [];
+  const searched: SearchQuery[] = [];
   const artifacts: ArtifactService = {
     publish: async () => {
       throw new Error('not used');
@@ -73,6 +75,15 @@ function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<Art
       items: list.filter((a) => !query?.format || a.format === query.format),
       nextCursor: query?.cursor ? null : 'next-page',
     }),
+    search: async (query) => {
+      searched.push(query);
+      return {
+        items: [
+          { artifact: list[0] as Artifact, snippet: 'a «<img src=x onerror=alert(1)>» b «c' },
+        ],
+        nextCursor: query.cursor ? null : 'more',
+      };
+    },
     listVersions: async (id) => {
       const a = list.find((x) => x.id === id);
       if (!a) return null;
@@ -119,7 +130,7 @@ function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<Art
     ...overrides.config,
   };
   const deps: Deps = { config, artifacts, tokens, signer };
-  return { app: createUiRoutes(deps), deleted };
+  return { app: createUiRoutes(deps), deleted, searched };
 }
 
 const get = (app: ReturnType<typeof fakeDeps>['app'], path: string) =>
@@ -208,6 +219,57 @@ describe('list', () => {
     });
     const body = await (await get(app, '/')).text();
     assert.match(body, /href="\/connect">Connect an agent/);
+  });
+});
+
+describe('search', () => {
+  it('shows a search box on the list page', async () => {
+    const { app, searched } = fakeDeps({});
+    const body = await (await get(app, '/')).text();
+    assert.match(body, /<form class="search" method="get" action="\/" role="search">/);
+    assert.match(body, /<input type="search" name="q" value=""/);
+    assert.deepEqual(searched, []);
+  });
+
+  it('escapes snippets and turns only the match markers into <mark>', async () => {
+    const { app, searched } = fakeDeps({});
+    const res = await get(app, '/?q=%20%22onerror%22%20');
+    const body = await res.text();
+    assert.equal(res.status, 200);
+    assert.deepEqual(searched, [{ query: '"onerror"', cursor: undefined, limit: 20 }]);
+    assert.ok(
+      body.includes('<p class="hit">a <mark>&lt;img src=x onerror=alert(1)&gt;</mark> b «c</p>'),
+    );
+    assert.ok(!body.includes('<img'));
+    assert.ok(body.includes('value="&quot;onerror&quot;"'));
+    assert.ok(body.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+    assert.match(body, /href="\/\?q=%22onerror%22&amp;cursor=more">More results/);
+    assert.ok(!body.includes('A PDF'));
+  });
+
+  it('passes the cursor and shows an empty state', async () => {
+    const empty = fakeDeps({
+      artifacts: { search: async () => ({ items: [], nextCursor: null }) },
+    });
+    const body = await (await get(empty.app, '/?q=%3Cb%3E')).text();
+    assert.match(body, /Nothing matches <strong>&lt;b&gt;<\/strong>/);
+
+    const { app, searched } = fakeDeps({});
+    await get(app, '/?q=x&cursor=more');
+    assert.deepEqual(searched, [{ query: 'x', cursor: 'more', limit: 20 }]);
+  });
+
+  it('answers a bad cursor with 400', async () => {
+    const { app } = fakeDeps({
+      artifacts: {
+        search: async () => {
+          throw new AppError('invalid_input', 'Invalid cursor');
+        },
+      },
+    });
+    const res = await get(app, '/?q=x&cursor=junk');
+    assert.equal(res.status, 400);
+    assert.match(await res.text(), /Invalid cursor/);
   });
 });
 

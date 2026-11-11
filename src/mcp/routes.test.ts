@@ -7,6 +7,7 @@ import {
   type ArtifactService,
   type Deps,
   type PublishInput,
+  type SearchQuery,
   type TokenInfo,
   type Version,
 } from '../contracts.ts';
@@ -42,6 +43,7 @@ const version: Version = {
 
 function setup(overrides: Partial<ArtifactService> = {}) {
   const published: { input: PublishInput; publishedBy: string }[] = [];
+  const searched: SearchQuery[] = [];
   const artifacts: ArtifactService = {
     async publish(input, publishedBy) {
       published.push({ input, publishedBy });
@@ -55,6 +57,10 @@ function setup(overrides: Partial<ArtifactService> = {}) {
     },
     async list() {
       return { items: [artifact], nextCursor: null };
+    },
+    async search(query) {
+      searched.push(query);
+      return { items: [{ artifact, snippet: 'say «hello» there' }], nextCursor: 'c2' };
     },
     async listVersions(id) {
       return id === 'art1' ? [version] : null;
@@ -84,7 +90,7 @@ function setup(overrides: Partial<ArtifactService> = {}) {
   };
   const app = new Hono();
   app.route('/mcp', createMcpRoutes(deps));
-  return { app, published };
+  return { app, published, searched };
 }
 
 let nextId = 1;
@@ -160,6 +166,7 @@ test('initialize and tools/list', async () => {
     'list_artifacts',
     'list_versions',
     'publish_artifact',
+    'search_artifacts',
   ]);
 });
 
@@ -251,4 +258,23 @@ test('get_artifact inlines an SVG but not a raster image', async () => {
     assert.equal(json.entryContent, inlined ? '<svg/>' : undefined, path);
     assert.equal(typeof json.entryContentOmitted, inlined ? 'undefined' : 'string', path);
   }
+});
+
+test('search_artifacts passes the query through and returns hits with url and snippet', async () => {
+  const { app, searched } = setup();
+  const { result, json } = await callTool(app, 'search_artifacts', {
+    query: 'hello AND "x',
+    limit: 5,
+    cursor: 'c1',
+  });
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(searched, [{ query: 'hello AND "x', limit: 5, cursor: 'c1' }]);
+  assert.equal(json.items[0].id, 'art1');
+  assert.equal(json.items[0].title, 'Hello');
+  assert.equal(json.items[0].url, 'https://app.test/a/art1');
+  assert.equal(json.items[0].snippet, 'say «hello» there');
+  assert.equal(json.nextCursor, 'c2');
+
+  const missing = await rpc(app, 'tools/call', { name: 'search_artifacts', arguments: {} });
+  assert.equal((await missing.json()).result.isError, true);
 });

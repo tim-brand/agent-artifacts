@@ -12,8 +12,9 @@ import type { BlobStore } from './blobs.ts';
 import { transaction } from './db.ts';
 import { hasContent, prepareVersion } from './files.ts';
 import { now, randomId } from './ids.ts';
+import { createSearchIndex } from './search.ts';
 
-type ArtifactRow = {
+export type ArtifactRow = {
   id: string;
   title: string;
   description: string;
@@ -84,6 +85,21 @@ function decodeCursor(cursor: string): [string, string] {
   throw new AppError('invalid_input', 'Invalid cursor');
 }
 
+function encodeOffset(offset: number): string {
+  return Buffer.from(String(offset)).toString('base64url');
+}
+
+function decodeOffset(cursor: string): number {
+  const text = Buffer.from(cursor, 'base64url').toString('utf8');
+  if (/^\d{1,9}$/.test(text)) return Number(text);
+  throw new AppError('invalid_input', 'Invalid cursor');
+}
+
+function pageLimit(limit: number | undefined): number {
+  const requested = Math.trunc(Number(limit ?? 20));
+  return Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 100) : 20;
+}
+
 function cleanTitle(title: string | undefined): string | undefined {
   if (title === undefined) return undefined;
   const trimmed = String(title).trim();
@@ -132,6 +148,7 @@ export function createArtifactService(
     delete: db.prepare('UPDATE artifacts SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL'),
   };
 
+  const index = createSearchIndex(db, blobs);
   const findArtifact = (id: string) => stmt.artifact.get(id) as ArtifactRow | undefined;
 
   return {
@@ -199,6 +216,7 @@ export function createArtifactService(
             stmt.insertFile.run(id, version, f.path, f.bytes.byteLength, f.contentType, f.sha256);
           }
         }
+        index.reindexArtifact(id);
         return { id, version, title: newTitle, url: `${appOrigin}/a/${id}` };
       });
     },
@@ -221,8 +239,7 @@ export function createArtifactService(
     },
 
     async list(query = {}) {
-      const requested = Math.trunc(Number(query.limit ?? 20));
-      const limit = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 100) : 20;
+      const limit = pageLimit(query.limit);
       const [after, afterId] = query.cursor ? decodeCursor(query.cursor) : [null, null];
       const format = query.format ?? null;
       const rows = stmt.list.all(format, format, after, after, afterId, limit + 1) as ArtifactRow[];
@@ -231,6 +248,18 @@ export function createArtifactService(
       return {
         items: page.map(toArtifact),
         nextCursor: rows.length > limit && last ? encodeCursor(last) : null,
+      };
+    },
+
+    async search(query) {
+      const limit = pageLimit(query.limit);
+      const offset = query.cursor ? decodeOffset(query.cursor) : 0;
+      const rows = index.search(String(query.query ?? ''), limit + 1, offset);
+      return {
+        items: rows
+          .slice(0, limit)
+          .map((row) => ({ artifact: toArtifact(row), snippet: row.snippet })),
+        nextCursor: rows.length > limit ? encodeOffset(offset + limit) : null,
       };
     },
 
@@ -248,7 +277,11 @@ export function createArtifactService(
     },
 
     async delete(id) {
-      return stmt.delete.run(now(), id).changes > 0;
+      return transaction(db, () => {
+        const deleted = stmt.delete.run(now(), id).changes > 0;
+        if (deleted) index.reindexArtifact(id);
+        return deleted;
+      });
     },
   };
 }
