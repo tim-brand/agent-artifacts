@@ -21,6 +21,7 @@ export function createPurge(db: DatabaseSync, blobsDir: string) {
   const deleteSearch = db.prepare('DELETE FROM artifacts_fts WHERE artifact_id = ?');
   const deleteFiles = db.prepare('DELETE FROM version_files WHERE artifact_id = ?');
   const deleteVersions = db.prepare('DELETE FROM versions WHERE artifact_id = ?');
+  // Share links, threads, comments and live page data go with it: ON DELETE CASCADE.
   const deleteArtifact = db.prepare('DELETE FROM artifacts WHERE id = ?');
   const referenced = db.prepare('SELECT DISTINCT sha256 FROM version_files');
 

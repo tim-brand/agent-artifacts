@@ -32,6 +32,7 @@ function artifact(id: string, format: Artifact['format'], title: string, version
     description: 'A <b>description</b>',
     format,
     latestVersion: versions,
+    capabilities: { db: false, viewer: false },
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-02T00:00:00.000Z',
   };
@@ -255,7 +256,8 @@ function fakeDeps(overrides: {
     devUser: null,
     ...overrides.config,
   };
-  const deps: Deps = { config, artifacts, comments, tokens, shareLinks, signer };
+  const data = {} as Deps['data'];
+  const deps: Deps = { config, artifacts, comments, data, tokens, shareLinks, signer };
   return {
     app: createUiRoutes(deps),
     deleted,

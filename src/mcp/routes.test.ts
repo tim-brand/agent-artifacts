@@ -8,6 +8,7 @@ import {
   type CommentAuthor,
   type CommentInput,
   type CommentService,
+  type DataService,
   type Deps,
   type PublishInput,
   type SearchQuery,
@@ -32,6 +33,7 @@ const artifact: Artifact = {
   description: '',
   format: 'markdown',
   latestVersion: 2,
+  capabilities: { db: true, viewer: false },
   createdAt: '2026-01-01T00:00:00Z',
   updatedAt: '2026-01-02T00:00:00Z',
 };
@@ -85,6 +87,7 @@ const thread: Thread = {
 function setup(
   overrides: Partial<ArtifactService> = {},
   commentOverrides: Partial<CommentService> = {},
+  dataOverrides: Partial<DataService> = {},
 ) {
   const added: { input: CommentInput; author: CommentAuthor }[] = [];
   const resolved: [string, boolean][] = [];
@@ -145,6 +148,24 @@ function setup(
     },
     ...overrides,
   };
+  const dataCalls: unknown[][] = [];
+  const doc = { id: 'd1', data: { a: 1 }, updatedAt: '2026-01-05T00:00:00Z', updatedBy: 'x' };
+  const recordData =
+    <T>(op: string, value: T) =>
+    async (...args: unknown[]) => {
+      dataCalls.push([op, ...args]);
+      return value;
+    };
+  const data: DataService = {
+    get: recordData('get', doc),
+    set: recordData('set', doc),
+    update: recordData('update', doc),
+    delete: recordData('delete', true),
+    list: recordData('list', { items: [doc], nextCursor: null }),
+    query: recordData('query', [doc]),
+    changes: async () => assert.fail('not for agents'),
+    ...dataOverrides,
+  };
   const shareCalls: string[] = [];
   const record = (name: string) => async () => {
     shareCalls.push(name);
@@ -161,6 +182,7 @@ function setup(
     },
     artifacts,
     comments,
+    data,
     tokens: {
       create: async () => assert.fail('not used'),
       list: async () => [],
@@ -181,7 +203,7 @@ function setup(
   };
   const app = new Hono();
   app.route('/mcp', createMcpRoutes(deps));
-  return { app, published, searched, restored, shareCalls, added, resolved };
+  return { app, published, searched, restored, shareCalls, added, resolved, dataCalls };
 }
 
 let nextId = 1;
@@ -203,7 +225,9 @@ async function callTool(app: Hono, name: string, args: Record<string, unknown>) 
   assert.equal(res.status, 200);
   const body = await res.json();
   const result = body.result;
-  return { result, json: JSON.parse(result.content[0].text) };
+  const text: string = result.content[0].text;
+  // The SDK reports a schema failure as plain text, not JSON.
+  return { result, json: text.startsWith('{') ? JSON.parse(text) : { text } };
 }
 
 test('401 without a token or with a bad one', async () => {
@@ -253,6 +277,12 @@ test('initialize and tools/list', async () => {
   const names = (await list.json()).result.tools.map((t: { name: string }) => t.name).sort();
   assert.deepEqual(names, [
     'add_comment',
+    'artifact_data_delete',
+    'artifact_data_get',
+    'artifact_data_list',
+    'artifact_data_query',
+    'artifact_data_set',
+    'artifact_data_update',
     'delete_artifact',
     'get_artifact',
     'list_artifacts',
@@ -275,6 +305,7 @@ test('publish_artifact passes input through with publishedBy = token name', asyn
     files: { 'index.html': '<h1>hi</h1>', 'logo.png': { base64: 'AAAA' } },
     entry: 'index.html',
     expectedVersion: 3,
+    capabilities: { db: true },
   };
   const { result, json } = await callTool(app, 'publish_artifact', input);
   assert.equal(result.isError, undefined);
@@ -558,4 +589,54 @@ test('resolve_comment resolves by default, reopens with resolved: false', async 
     ['th1', false],
     ['nope', true],
   ]);
+});
+
+test('publish_artifact refuses unknown capabilities', async () => {
+  const { app, published } = setup();
+  const { result } = await callTool(app, 'publish_artifact', {
+    id: 'art1',
+    capabilities: { db: true, network: true },
+  });
+  assert.equal(result.isError, true);
+  assert.deepEqual(published, []);
+});
+
+test('the data tools call the data service as the token, and check document ids', async () => {
+  const { app, dataCalls } = setup();
+  const by = 'claude-laptop';
+  await callTool(app, 'artifact_data_get', { id: 'art1', docId: 'd1' });
+  await callTool(app, 'artifact_data_list', { id: 'art1', limit: 5 });
+  await callTool(app, 'artifact_data_query', { id: 'art1', where: { a: 1 }, order: 'desc' });
+  const set = await callTool(app, 'artifact_data_set', { id: 'art1', docId: 'd1', data: { a: 2 } });
+  await callTool(app, 'artifact_data_update', { id: 'art1', docId: 'd1', fields: { b: 3 } });
+  const del = await callTool(app, 'artifact_data_delete', { id: 'art1', docId: 'd1' });
+  assert.deepEqual(set.json.doc.data, { a: 1 });
+  assert.equal(del.json.deleted, true);
+  assert.deepEqual(dataCalls, [
+    ['get', 'art1', 'd1'],
+    ['list', 'art1', { cursor: undefined, limit: 5 }],
+    ['query', 'art1', { where: { a: 1 }, order: 'desc' }],
+    ['set', 'art1', 'd1', { a: 2 }, by],
+    ['update', 'art1', 'd1', { b: 3 }, by],
+    ['delete', 'art1', 'd1', by],
+  ]);
+
+  const bad = await callTool(app, 'artifact_data_set', { id: 'art1', docId: '../x', data: {} });
+  assert.equal(bad.result.isError, true);
+  assert.equal(dataCalls.length, 6);
+});
+
+test('a data tool maps forbidden from the service', async () => {
+  const { app } = setup(
+    {},
+    {},
+    {
+      get: async () => {
+        throw new AppError('forbidden', 'no db capability');
+      },
+    },
+  );
+  const { result, json } = await callTool(app, 'artifact_data_get', { id: 'x', docId: 'd' });
+  assert.equal(result.isError, true);
+  assert.equal(json.error, 'forbidden');
 });

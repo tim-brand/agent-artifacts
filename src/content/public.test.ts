@@ -105,7 +105,7 @@ test('public links never get the comment bridge, which /s/ adds to the same entr
     const signed = await get(new URL(signer.url(id, 1, entry)).pathname);
     assert.match(
       await signed.text(),
-      /<script src="\/_aa\/bridge\.js\?v=[0-9a-f]{16}"><\/script>\n$/,
+      /<script src="\/_aa\/bridge\.js\?v=[0-9a-f]{16}"><\/script>\n/,
     );
 
     const { token } = await shareLinks.create(id);
@@ -117,6 +117,32 @@ test('public links never get the comment bridge, which /s/ adds to the same entr
       assert.doesNotMatch(res.headers.get('etag') ?? '', /bridge/);
     }
   }
+});
+
+test('a public live page gets the bridge, in its no-shell form, so it does not crash', async (t) => {
+  const { artifacts, shareLinks, get } = setup(t);
+  const page = '<!doctype html><html><body><script>openArtifacts.ready</script></body></html>';
+  const live = await artifacts.publish(
+    { title: 'Poll', content: page, format: 'html', capabilities: { db: true } },
+    'a',
+  );
+  const { token } = await shareLinks.create(live.id);
+  const res = await get(`/p/${token}/index.html`);
+  assert.equal(res.status, 200);
+  assertPublicHeaders(res);
+  assert.match(
+    await res.text(),
+    /^<!doctype html>\n<script src="\/_aa\/bridge\.js\?v=[0-9a-f]{16}">/,
+  );
+  assert.match(res.headers.get('etag') ?? '', /-bridge-/);
+  // Only on the entry, and not on markdown, which has no runtime to use.
+  assert.doesNotMatch(await (await get(`/p/${token}/index.html?raw=1`)).text(), /bridge\.js/);
+  const md = await artifacts.publish(
+    { title: 'Doc', content: '# Hi', format: 'markdown', capabilities: { db: true } },
+    'a',
+  );
+  const mdLink = await shareLinks.create(md.id);
+  assert.doesNotMatch(await (await get(`/p/${mdLink.token}/README.md`)).text(), /bridge\.js/);
 });
 
 test('a latest link follows new versions; a pinned one stays and may be cached', async (t) => {

@@ -15,9 +15,12 @@ import { renderCode, renderImage, renderMarkdown } from './render.ts';
  * - only the app origin may frame /s/, and nothing may frame /p/;
  * - nothing here ever sets a cookie.
  *
- * The one script this host adds to a page is the frame bridge (/_aa/bridge.js), on html and markdown
- * entries under /s/: the links the app's artifact page frames. It lets the reader comment on a
- * selection. Public links (/p/) never get it: their policy has `bridge: null`.
+ * The one script this host adds to a page is the bridge (/_aa/bridge.js): on html and markdown
+ * entries under /s/, the links the app's artifact page frames, and on public (/p/) html entries of
+ * an artifact that declares capabilities. In the app's frame it lets the reader comment on a
+ * selection and gives the page `window.openArtifacts` (live pages). Anywhere else, such as a /p/
+ * link or a /s/ link opened in its own tab, it only defines `window.openArtifacts` in its no-shell
+ * form, so a live page still loads and can say it only works in the app.
  */
 
 const SANDBOX =
@@ -36,16 +39,20 @@ type Policy = {
   frameAncestors: string;
   cacheControl: string;
   headers?: Record<string, string>;
-  /** Appended to html and markdown entries; null for none. */
+  /** Added to html and markdown entries; null for none. */
   bridge: Bridge | null;
+  /** Only to html entries that declare capabilities: a page that needs the runtime mustn't crash. */
+  runtimeOnly?: boolean;
 };
 
 const PUBLIC: Policy = {
   frameAncestors: "'none'",
   cacheControl: 'no-store',
   headers: { 'X-Robots-Tag': 'noindex, nofollow' },
-  // A public link is opened top-level, by anyone: no app to talk to, so never the bridge.
+  // Set in createContentRoutes. A public link is opened top-level, by anyone: no app to talk to,
+  // so the bridge only goes on live pages, where it always runs in its no-shell form.
   bridge: null,
+  runtimeOnly: true,
 };
 
 type Target = { exp: number; sig: string; id: string; version: number; path: string[] };
@@ -64,6 +71,7 @@ export function createContentRoutes(deps: Deps): Hono {
     hash: bridgeHash,
   };
   const signed: Policy = { frameAncestors: appOrigin, cacheControl: 'no-store', bridge };
+  const publicPolicy: Policy = { ...PUBLIC, bridge };
   const limiter = createRateLimiter({ capacity: 60, perMinute: 60 });
 
   const error = (status: 403 | 404 | 429 | 500, message: string, policy = signed) =>
@@ -118,7 +126,7 @@ export function createContentRoutes(deps: Deps): Hono {
 
     const pinned = shared.link.version !== null;
     const policy = {
-      ...PUBLIC,
+      ...publicPolicy,
       cacheControl: pinned ? `private, max-age=${PINNED_MAX_AGE}` : 'no-store',
     };
     const res = await serveFile(
@@ -169,8 +177,11 @@ async function serveFile(
   const raw = req.query('raw') === '1';
   const render =
     path === entry && (format === 'markdown' || format === 'code' || format === 'image') && !raw;
-  const bridge =
-    path === entry && (format === 'html' || format === 'markdown') && !raw ? policy.bridge : null;
+  const { db, viewer } = found.artifact.capabilities;
+  const wanted = policy.runtimeOnly
+    ? format === 'html' && (db || viewer)
+    : format === 'html' || format === 'markdown';
+  const bridge = path === entry && wanted && !raw ? policy.bridge : null;
   const sha256 = files.find((f) => f.path === path)?.sha256;
   const contentType = render ? HTML : file.contentType;
   const headers = securityHeaders(contentType, policy);
@@ -190,17 +201,28 @@ async function serveFile(
     const source = new TextDecoder().decode(file.bytes);
     body = format === 'markdown' ? renderMarkdown(title, source) : renderCode(title, path, source);
   }
-  // Appended after everything, so it can't land inside the doctype, the head or a script; the
-  // parser moves it into the body.
-  if (bridge) body = concat(body, bridge.tag);
+  if (bridge) body = insertScript(body, bridge.tag);
   return new Response(body as Uint8Array<ArrayBuffer> | string, { headers });
 }
 
-function concat(body: Uint8Array | string, tail: Uint8Array): Uint8Array {
-  const head = typeof body === 'string' ? new TextEncoder().encode(body) : body;
-  const out = new Uint8Array(head.byteLength + tail.byteLength);
-  out.set(head);
-  out.set(tail, head.byteLength);
+/** A doctype at the start, after an optional BOM, whitespace and comments. Bytes as latin1. */
+const DOCTYPE = /^(?:\xEF\xBB\xBF)?(?:\s|<!--[\s\S]*?-->)*<!doctype[^>]*>/i;
+
+/**
+ * Right after a leading doctype, the script runs before any of the page's own, so a page can use
+ * `window.openArtifacts` from its first inline script; the parser opens the head for it and still
+ * merges the page's own <html> attributes and head. Anything before the doctype would switch the
+ * page to quirks mode, so without one at the start it is appended after everything instead, where
+ * it can't land inside a tag or script; such a page reads the runtime from DOMContentLoaded.
+ */
+function insertScript(body: Uint8Array | string, tag: Uint8Array): Uint8Array {
+  const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
+  const start = Buffer.from(bytes.buffer, bytes.byteOffset, Math.min(bytes.byteLength, 16_384));
+  const at = DOCTYPE.exec(start.toString('latin1'))?.[0].length ?? bytes.byteLength;
+  const out = new Uint8Array(bytes.byteLength + tag.byteLength);
+  out.set(bytes.subarray(0, at));
+  out.set(tag, at);
+  out.set(bytes.subarray(at), at + tag.byteLength);
   return out;
 }
 

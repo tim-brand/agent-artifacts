@@ -37,7 +37,12 @@ const signer: ContentSigner = {
   },
 };
 
-type Stored = { format: Format; entry: string; files: Record<string, [string, string]> };
+type Stored = {
+  format: Format;
+  entry: string;
+  files: Record<string, [string, string]>;
+  live?: boolean;
+};
 
 const store: Record<string, Stored> = {
   site: {
@@ -86,6 +91,17 @@ const store: Record<string, Stored> = {
     entry: 'document.pdf',
     files: { 'document.pdf': ['application/pdf', '%PDF-1.4 fake'] },
   },
+  live: {
+    format: 'html',
+    entry: 'index.html',
+    live: true,
+    files: {
+      'index.html': [
+        'text/html; charset=utf-8',
+        '\uFEFF\n<!-- made by <b>an agent</b> -->\n<!DOCTYPE html>\n<html lang="nl"><head><script>openArtifacts.ready</script>',
+      ],
+    },
+  },
 };
 
 const readCalls: string[] = [];
@@ -107,6 +123,7 @@ const artifacts: ArtifactService = {
       description: '',
       format: stored.format,
       latestVersion: 1,
+      capabilities: { db: stored.live === true, viewer: false },
       createdAt: now,
       updatedAt: now,
     };
@@ -150,6 +167,7 @@ const deps = {
   tokens: {} as Deps['tokens'],
   shareLinks: {} as Deps['shareLinks'],
   comments: {} as Deps['comments'],
+  data: {} as Deps['data'],
 } satisfies Deps;
 
 const app = createContentRoutes(deps);
@@ -292,9 +310,12 @@ test('a markdown entry is rendered; ?raw=1 and other .md files are raw', async (
   assert.match(html, /<h1>Hello<\/h1>/);
   assert.match(html, /<table>/);
   assert.match(html, /<title>Title &lt;doc&gt;<\/title>/);
-  // The bridge is the only script, after the document.
+  // The bridge is the only script, right after the doctype.
   assert.equal(html.match(/<script/g)?.length, 1);
-  assert.match(html, /<\/html>\n\n<script src="\/_aa\/bridge\.js\?v=[0-9a-f]{16}"><\/script>\n$/);
+  assert.match(
+    html,
+    /^<!doctype html>\n<script src="\/_aa\/bridge\.js\?v=[0-9a-f]{16}"><\/script>\n\n<html lang="en">/,
+  );
 
   const raw = await get(`${signer.url('doc', 1, 'README.md')}?raw=1`);
   assert.equal(raw.headers.get('content-type'), 'text/markdown; charset=utf-8');
@@ -373,6 +394,19 @@ test('an html entry gets the bridge after its own bytes; ?raw=1 and other files 
   ] as const) {
     assert.doesNotMatch(await (await get(signer.url(id, 1, path))).text(), /bridge\.js/, path);
   }
+});
+
+test('the bridge goes right after a leading doctype, past a BOM and comments', async () => {
+  const res = await get(signer.url('live', 1, 'index.html'));
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const original = store.live?.files['index.html']?.[1] ?? '';
+  const prologue = '\uFEFF\n<!-- made by <b>an agent</b> -->\n<!DOCTYPE html>';
+  const html = new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes);
+  assert.ok(html.startsWith(prologue));
+  const rest = html.slice(prologue.length);
+  assert.match(rest, /^\n<script src="\/_aa\/bridge\.js\?v=[0-9a-f]{16}"><\/script>\n/);
+  // Byte offsets, not string indexes: the BOM is three bytes.
+  assert.equal(rest.replace(/^\n<script[^\n]*\n/, ''), original.slice(prologue.length));
 });
 
 test('the bridge script is served unsigned, talking only to the app origin', async () => {

@@ -96,7 +96,125 @@
       }));
     if (quotes.length > 0) toFrame({ type: 'aa:highlight', quotes });
   };
-  // The bridge says when it is listening; the frame may also have loaded before this script ran.
-  onFrameMessage('aa:ready', sendHighlights);
+  // Live pages: window.openArtifacts in the frame calls the data API through this page, which holds
+  // the session; the frame never sees a cookie or token. The artifact id comes from this page (the
+  // iframe's data-artifact, set by the server), never from a message.
+  //
+  // Why a MessageChannel: answers carry the artifact's data, and the viewer's email. A message to
+  // the frame's window must be posted with '*' (its origin is opaque), so it reaches whichever
+  // document the frame shows when it is delivered: after a link click, some other site. A port
+  // belongs to the one document it was transferred to and dies with it. So the frame gets one port,
+  // in answer to the first aa:ready from the frame's window, and every call and answer goes over
+  // it; only the transfer, which carries no data, uses '*'.
+  //
+  // One port per artifact page: a later aa:ready means the frame now shows another document (it
+  // navigated, or reloaded itself), which gets aa:no-port. The first one is the document this page
+  // put there: its bridge says ready as it loads, before the reader can click anything, and only
+  // the artifact's own script could navigate away sooner, which could read its own data anyway.
+  // The server checks the capability again on every call; the check here only saves a request.
+  const artifactId = frame?.dataset.artifact;
+  const json = (value, fallback) => {
+    try {
+      return JSON.parse(value ?? '') ?? fallback;
+    } catch {
+      return fallback;
+    }
+  };
+  const capabilities = json(frame?.dataset.capabilities, {});
+  const viewer = json(frame?.dataset.viewer, null);
+  const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+  const theme = () => (media?.matches ? 'dark' : 'light');
+  const DOC_ID = /^[A-Za-z0-9_-]{1,128}$/;
+  let channel = null;
+
+  const fail = (code, message) => ({ code, message });
+  const doc = (id) => {
+    if (typeof id !== 'string' || !DOC_ID.test(id)) {
+      throw fail('invalid_input', 'A document id is 1 to 128 characters of A-Z, a-z, 0-9, _ and -');
+    }
+    return `/data/${encodeURIComponent(id)}`;
+  };
+  const options = (value) => (value && typeof value === 'object' ? value : {});
+  const search = (params) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== null) query.set(key, String(value));
+    }
+    return `/data?${query}`;
+  };
+  // op -> [method, path, body, what of the answer the page gets]
+  const OPS = new Map([
+    ['get', ([id]) => ['GET', doc(id), null, (r) => r.doc]],
+    ['set', ([id, data]) => ['PUT', doc(id), { data }, (r) => r.doc]],
+    ['update', ([id, fields]) => ['PATCH', doc(id), { fields }, (r) => r.doc]],
+    ['delete', ([id]) => ['DELETE', doc(id), null, (r) => r.deleted]],
+    [
+      'list',
+      ([o]) => ['GET', search({ cursor: options(o).cursor, limit: options(o).limit }), null],
+    ],
+    ['query', ([o]) => ['POST', '/query', options(o), (r) => r.items]],
+    ['changes', ([since]) => ['GET', search({ since: Number(since) }), null]],
+  ]);
+
+  const run = async (op, args) => {
+    if (!capabilities.db) {
+      throw fail('forbidden', "This artifact doesn't declare the db capability");
+    }
+    const [method, path, body, pick = (r) => r] = OPS.get(op)(args);
+    let res;
+    try {
+      res = await fetch(`/api/artifacts/${encodeURIComponent(artifactId)}${path}`, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : {},
+        body: body ? JSON.stringify(body) : undefined,
+        credentials: 'same-origin',
+        redirect: 'error',
+      });
+    } catch {
+      throw fail('unavailable', 'Could not reach the app; reload the page to sign in again');
+    }
+    const answer = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw fail(String(answer?.error ?? 'error'), String(answer?.message ?? `HTTP ${res.status}`));
+    }
+    return pick(answer);
+  };
+
+  const onCall = (port, data) => {
+    if (!data || typeof data !== 'object' || !Number.isSafeInteger(data.id)) return;
+    const reply = (message) => port.postMessage({ type: 'result', id: data.id, ...message });
+    if (typeof data.op !== 'string' || !OPS.has(data.op) || !Array.isArray(data.args)) {
+      reply({ ok: false, error: fail('invalid_input', 'Unknown call') });
+      return;
+    }
+    run(data.op, data.args).then(
+      (value) => reply({ ok: true, value }),
+      (error) => reply({ ok: false, error: error?.code ? error : fail('error', String(error)) }),
+    );
+  };
+
+  const grantPort = () => {
+    if (!artifactId || !frame.contentWindow) return;
+    if (channel) {
+      toFrame({ type: 'aa:no-port' });
+      return;
+    }
+    channel = new MessageChannel();
+    const port = channel.port1;
+    port.onmessage = (event) => onCall(port, event.data);
+    frame.contentWindow.postMessage({ type: 'aa:port' }, '*', [channel.port2]);
+    port.postMessage({ type: 'init', theme: theme(), viewer: capabilities.viewer ? viewer : null });
+  };
+  media?.addEventListener?.('change', () => {
+    channel?.port1.postMessage({ type: 'theme', theme: theme() });
+  });
+
+  // The bridge says when it is listening. The frame may also have loaded before this script ran,
+  // so ask it to say so again.
+  onFrameMessage('aa:ready', () => {
+    sendHighlights();
+    grantPort();
+  });
   sendHighlights();
+  toFrame({ type: 'aa:ping' });
 })();
