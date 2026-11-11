@@ -149,6 +149,7 @@ const deps = {
   signer,
   tokens: {} as Deps['tokens'],
   shareLinks: {} as Deps['shareLinks'],
+  comments: {} as Deps['comments'],
 } satisfies Deps;
 
 const app = createContentRoutes(deps);
@@ -164,11 +165,13 @@ function assertSafeHeaders(res: Response) {
   );
 }
 
+const BRIDGE_TAG = /\n<script src="\/_aa\/bridge\.js\?v=[0-9a-f]{16}"><\/script>\n$/;
+
 test('a valid link serves the bytes with their content type, sandboxed', async () => {
-  const res = await get(signer.url('site', 1, 'index.html'));
+  const res = await get(signer.url('site', 1, 'app.js'));
   assert.equal(res.status, 200);
-  assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8');
-  assert.equal(await res.text(), store.site?.files['index.html']?.[1]);
+  assert.equal(res.headers.get('content-type'), 'text/javascript; charset=utf-8');
+  assert.equal(await res.text(), store.site?.files['app.js']?.[1]);
   assert.match(res.headers.get('content-security-policy') ?? '', SANDBOX);
   assert.match(res.headers.get('cache-control') ?? '', /^private, max-age=(3600|359\d)$/);
   assert.match(res.headers.get('etag') ?? '', /^"[0-9a-f]{64}"$/);
@@ -289,7 +292,9 @@ test('a markdown entry is rendered; ?raw=1 and other .md files are raw', async (
   assert.match(html, /<h1>Hello<\/h1>/);
   assert.match(html, /<table>/);
   assert.match(html, /<title>Title &lt;doc&gt;<\/title>/);
-  assert.doesNotMatch(html, /<script/);
+  // The bridge is the only script, after the document.
+  assert.equal(html.match(/<script/g)?.length, 1);
+  assert.match(html, /<\/html>\n\n<script src="\/_aa\/bridge\.js\?v=[0-9a-f]{16}"><\/script>\n$/);
 
   const raw = await get(`${signer.url('doc', 1, 'README.md')}?raw=1`);
   assert.equal(raw.headers.get('content-type'), 'text/markdown; charset=utf-8');
@@ -342,4 +347,46 @@ test('an image entry is a page that centers it; ?raw=1 is the bytes, sandboxed e
   assertSafeHeaders(raw);
   assert.equal(await raw.text(), store.svg?.files['charts/q3 "big".svg']?.[1]);
   assert.notEqual(raw.headers.get('etag'), page.headers.get('etag'));
+});
+
+test('an html entry gets the bridge after its own bytes; ?raw=1 and other files do not', async () => {
+  const url = signer.url('site', 1, 'index.html');
+  const res = await get(url);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8');
+  assert.match(res.headers.get('content-security-policy') ?? '', SANDBOX);
+  const html = await res.text();
+  const original = store.site?.files['index.html']?.[1] ?? '';
+  assert.ok(html.startsWith(original));
+  assert.match(html.slice(original.length), BRIDGE_TAG);
+  assert.match(res.headers.get('etag') ?? '', /^"[0-9a-f]{64}-bridge-[0-9a-f]{16}"$/);
+
+  const raw = await get(`${url}?raw=1`);
+  assert.equal(await raw.text(), original);
+  assert.notEqual(raw.headers.get('etag'), res.headers.get('etag'));
+
+  for (const [id, path] of [
+    ['site', 'my file.txt'],
+    ['code', 'main.ts'],
+    ['svg', 'charts/q3 "big".svg'],
+    ['doc', 'notes.md'],
+  ] as const) {
+    assert.doesNotMatch(await (await get(signer.url(id, 1, path))).text(), /bridge\.js/, path);
+  }
+});
+
+test('the bridge script is served unsigned, talking only to the app origin', async () => {
+  const html = await (await get(signer.url('site', 1, 'index.html'))).text();
+  const src = /<script src="([^"]+)"><\/script>\n$/.exec(html)?.[1] ?? '';
+  const res = await get(new URL(src, CONTENT).href);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'text/javascript; charset=utf-8');
+  assert.equal(res.headers.get('cache-control'), 'public, max-age=86400');
+  assertSafeHeaders(res);
+  const js = await res.text();
+  assert.ok(js.includes(`const APP_ORIGIN = "${APP}";`));
+  assert.doesNotMatch(js, /__APP_ORIGIN__/);
+  assert.match(js, /event\.source !== window\.parent \|\| event\.origin !== APP_ORIGIN/);
+  assert.equal((await get(`${CONTENT}/_aa/bridge.js`, { method: 'POST' })).status, 404);
+  assert.equal((await get(`${CONTENT}/_aa/other.js`)).status, 404);
 });

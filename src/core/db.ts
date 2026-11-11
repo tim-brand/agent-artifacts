@@ -99,6 +99,30 @@ const MIGRATIONS: Migration[] = [
   );
   CREATE INDEX share_links_by_artifact ON share_links (artifact_id, created_at DESC);
   `,
+
+  // Comments. ON DELETE CASCADE so purging an artifact for good takes its threads and comments.
+  `
+  CREATE TABLE threads (
+    id TEXT PRIMARY KEY,
+    artifact_id TEXT NOT NULL REFERENCES artifacts (id) ON DELETE CASCADE,
+    anchor_json TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    resolved_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX threads_by_artifact ON threads (artifact_id, updated_at DESC);
+
+  CREATE TABLE comments (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL REFERENCES threads (id) ON DELETE CASCADE,
+    author TEXT NOT NULL,
+    typed INTEGER NOT NULL CHECK (typed IN (0, 1)),
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX comments_by_thread ON comments (thread_id, created_at);
+  `,
 ];
 
 export function openDb(dataDir: string, blobs: BlobStore): DatabaseSync {

@@ -1,6 +1,6 @@
 import { type Context, Hono } from 'hono';
 import { AppError, type Deps, type Format, type ShareLink } from '../contracts.ts';
-import { contentSecurityPolicy } from './layout.ts';
+import { APP_JS, contentSecurityPolicy } from './layout.ts';
 import {
   artifactPage,
   connectPage,
@@ -13,6 +13,13 @@ import {
 } from './views.ts';
 
 type Env = { Variables: { user: string } };
+type Form = Record<string, string | File | (string | File)[]>;
+
+/** A text form field, or '' when it is missing or not text. */
+const field = (form: Form, name: string): string => {
+  const value = form[name];
+  return typeof value === 'string' ? value : '';
+};
 
 const isFormat = (value: string | undefined): value is Format => FORMATS.includes(value as Format);
 
@@ -29,7 +36,7 @@ function versionParam(value: string): number | null {
  * from X-authentik-email (or DEV_USER locally). Every POST must come from the app origin.
  */
 export function createUiRoutes(deps: Deps): Hono {
-  const { config, artifacts, tokens, shareLinks, signer } = deps;
+  const { config, artifacts, comments, tokens, shareLinks, signer } = deps;
   const csp = contentSecurityPolicy(config.contentOrigin);
   const ui = new Hono<Env>();
 
@@ -68,6 +75,13 @@ export function createUiRoutes(deps: Deps): Hono {
     await next();
   });
 
+  ui.get('/static/app.js', (c) => {
+    c.header('Cache-Control', 'private, max-age=31536000, immutable');
+    return c.body(APP_JS, 200, { 'Content-Type': 'text/javascript; charset=utf-8' });
+  });
+
+  const openCounts = (items: { id: string }[]) => comments.openCounts(items.map((a) => a.id));
+
   ui.get('/', async (c) => {
     const format = c.req.query('format');
     const cursor = c.req.query('cursor') || undefined;
@@ -75,7 +89,13 @@ export function createUiRoutes(deps: Deps): Hono {
     if (query) {
       const page = await artifacts.search({ query, cursor, limit: 20 });
       return c.html(
-        searchPage({ user: c.get('user'), query, hits: page.items, nextCursor: page.nextCursor }),
+        searchPage({
+          user: c.get('user'),
+          query,
+          hits: page.items,
+          nextCursor: page.nextCursor,
+          openComments: await openCounts(page.items.map((hit) => hit.artifact)),
+        }),
       );
     }
     const page = await artifacts.list({
@@ -89,6 +109,7 @@ export function createUiRoutes(deps: Deps): Hono {
         items: page.items,
         nextCursor: page.nextCursor,
         format: isFormat(format) ? format : undefined,
+        openComments: await openCounts(page.items),
       }),
     );
   });
@@ -102,7 +123,8 @@ export function createUiRoutes(deps: Deps): Hono {
     const found = await artifacts.get(id, versionNumber);
     const versions = found ? await artifacts.listVersions(id) : null;
     const links = found ? await shareLinks.list(id) : null;
-    if (!found || !versions || !links) return notFound(c);
+    const threads = found ? await comments.list(id, 'all') : null;
+    if (!found || !versions || !links || !threads) return notFound(c);
     const { artifact, version } = found;
     return c.html(
       artifactPage({
@@ -110,6 +132,7 @@ export function createUiRoutes(deps: Deps): Hono {
         artifact,
         version,
         versions,
+        threads,
         url: (path) => signer.url(artifact.id, version.version, path),
         shareLinks: links,
         createdLink: created,
@@ -167,6 +190,55 @@ export function createUiRoutes(deps: Deps): Hono {
     const id = c.req.param('id');
     if (!(await shareLinks.revoke(id, c.req.param('link')))) return notFound(c);
     return c.redirect(`/a/${encodeURIComponent(id)}`, 303);
+  });
+
+  // Comments from this UI are the signed-in owner's own words: the only place `typed` is true.
+  const owner = (c: Context<Env>) => ({ name: c.get('user'), typed: true });
+
+  /** Back to the version the form was on (the plain artifact URL for the latest), at the thread. */
+  const backTo = async (c: Context<Env>, id: string, form: Form, threadId: string) => {
+    const latest = (await artifacts.get(id))?.artifact.latestVersion;
+    const version = versionParam(field(form, 'version'));
+    const path = version && version !== latest ? `/v/${version}` : '';
+    return c.redirect(`/a/${encodeURIComponent(id)}${path}#thread-${threadId}`, 303);
+  };
+
+  ui.post('/a/:id/comments', async (c) => {
+    const id = c.req.param('id');
+    const form = await c.req.parseBody();
+    const threadId = field(form, 'threadId') || undefined;
+    const exact = field(form, 'exact');
+    const thread = await comments.add(
+      threadId
+        ? { artifactId: id, threadId, body: field(form, 'body') }
+        : {
+            artifactId: id,
+            body: field(form, 'body'),
+            version: versionParam(field(form, 'version')) ?? undefined,
+            anchor: exact.trim()
+              ? {
+                  kind: 'text',
+                  exact,
+                  prefix: field(form, 'prefix'),
+                  suffix: field(form, 'suffix'),
+                }
+              : { kind: 'note' },
+          },
+      owner(c),
+    );
+    return backTo(c, id, form, thread.id);
+  });
+
+  // The thread's reply form posts here too (Resolve/Reopen), so a reply typed first isn't lost.
+  ui.post('/a/:id/comments/:threadId/resolve', async (c) => {
+    const id = c.req.param('id');
+    const threadId = c.req.param('threadId');
+    const form = await c.req.parseBody();
+    const body = field(form, 'body');
+    if (body.trim()) await comments.add({ artifactId: id, threadId, body }, owner(c));
+    const thread = await comments.resolve(threadId, field(form, 'resolved') !== '0', id);
+    if (!thread) return notFound(c);
+    return backTo(c, id, form, thread.id);
   });
 
   ui.get('/settings/tokens', async (c) =>

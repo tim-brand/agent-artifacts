@@ -171,10 +171,13 @@ test('create refuses unknown artifacts and versions, long labels and past expiry
 test('the migration adds the table to an existing database', async (t) => {
   const { db, publish, reopen } = setup(t);
   const id = await publish();
-  db.exec('DROP TABLE share_links; PRAGMA user_version = 2;');
+  // Later steps run again too, so their tables go as well.
+  db.exec(
+    'DROP TABLE share_links; DROP TABLE comments; DROP TABLE threads; PRAGMA user_version = 2;',
+  );
   const { shareLinks } = reopen();
   const { token } = await shareLinks.create(id);
   assert.equal((await shareLinks.resolve(token))?.version, 1);
   const { user_version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
-  assert.equal(user_version, 3);
+  assert.equal(user_version, 4);
 });

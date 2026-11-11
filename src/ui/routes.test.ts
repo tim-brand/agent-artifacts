@@ -5,12 +5,16 @@ import {
   AppError,
   type Artifact,
   type ArtifactService,
+  type CommentAuthor,
+  type CommentInput,
+  type CommentService,
   type ContentSigner,
   type Deps,
   type SearchQuery,
   type ShareLink,
   type ShareLinkInput,
   type ShareLinkService,
+  type Thread,
   type TokenInfo,
   type TokenService,
   type Version,
@@ -48,7 +52,59 @@ function version(a: Artifact, n: number, entry: string): Version {
   };
 }
 
-function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<ArtifactService> }) {
+const THREADS: Thread[] = [
+  {
+    id: 'th-open',
+    artifactId: 'a1',
+    anchor: { kind: 'text', exact: 'Quoted "<b>"', prefix: 'before <', suffix: '> after' },
+    version: 2,
+    resolvedAt: null,
+    createdAt: '2026-01-03T00:00:00.000Z',
+    updatedAt: '2026-01-03T00:00:00.000Z',
+    comments: [
+      {
+        id: 'c1',
+        author: 'owner@example.com',
+        typed: true,
+        body: 'Fix <script>alert(2)</script>',
+        createdAt: '2026-01-03T00:00:00.000Z',
+      },
+      {
+        id: 'c2',
+        author: 'agent <x>',
+        typed: false,
+        body: 'Done',
+        createdAt: '2026-01-03T00:00:00.000Z',
+      },
+    ],
+  },
+  {
+    id: 'th-done',
+    artifactId: 'a1',
+    anchor: { kind: 'text', exact: 'Old quote', prefix: '', suffix: '' },
+    version: 3,
+    resolvedAt: '2026-01-04T00:00:00.000Z',
+    createdAt: '2026-01-03T00:00:00.000Z',
+    updatedAt: '2026-01-04T00:00:00.000Z',
+    comments: [],
+  },
+  {
+    id: 'th-new',
+    artifactId: 'a1',
+    anchor: { kind: 'note' },
+    version: 3,
+    resolvedAt: null,
+    createdAt: '2026-01-03T00:00:00.000Z',
+    updatedAt: '2026-01-03T00:00:00.000Z',
+    comments: [],
+  },
+];
+
+function fakeDeps(overrides: {
+  config?: Partial<Config>;
+  artifacts?: Partial<ArtifactService>;
+  comments?: Partial<CommentService>;
+}) {
   const list: Artifact[] = [
     artifact('a1', 'html', '<script>alert(1)</script>', 3),
     artifact('p1', 'pdf', 'A PDF'),
@@ -119,6 +175,27 @@ function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<Art
     ...overrides.artifacts,
   };
 
+  const added: { input: CommentInput; author: CommentAuthor }[] = [];
+  const resolved: [string, boolean, string | undefined][] = [];
+  const comments: CommentService = {
+    list: async (id) =>
+      list.some((a) => a.id === id) ? THREADS.filter((t) => t.artifactId === id) : null,
+    add: async (input, author) => {
+      added.push({ input, author });
+      if (input.threadId && !THREADS.some((t) => t.id === input.threadId)) {
+        throw new AppError('not_found', 'no thread');
+      }
+      return { ...(THREADS[2] as Thread), id: input.threadId ?? 'th-created' };
+    },
+    resolve: async (threadId, value, artifactId) => {
+      resolved.push([threadId, value, artifactId]);
+      return THREADS.find((t) => t.id === threadId && t.artifactId === artifactId) ?? null;
+    },
+    openCounts: async (ids): Promise<Record<string, number>> =>
+      ids.includes('a1') ? { a1: 2 } : {},
+    ...overrides.comments,
+  };
+
   const stored: TokenInfo[] = [];
   const tokens: TokenService = {
     create: async (name) => {
@@ -178,8 +255,18 @@ function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<Art
     devUser: null,
     ...overrides.config,
   };
-  const deps: Deps = { config, artifacts, tokens, shareLinks, signer };
-  return { app: createUiRoutes(deps), deleted, searched, undeleted, restored, shared, links };
+  const deps: Deps = { config, artifacts, comments, tokens, shareLinks, signer };
+  return {
+    app: createUiRoutes(deps),
+    deleted,
+    searched,
+    undeleted,
+    restored,
+    shared,
+    links,
+    added,
+    resolved,
+  };
 }
 
 const get = (app: ReturnType<typeof fakeDeps>['app'], path: string) =>
@@ -609,5 +696,164 @@ describe('share links', () => {
     });
     const body = await (await get(app, '/a/a1')).text();
     assert.match(body, /<span class="badge">expired<\/span>/);
+  });
+});
+
+describe('comments', () => {
+  it('shows an open-comments badge in the list and in search results', async () => {
+    const { app } = fakeDeps({});
+    const list = await (await get(app, '/')).text();
+    assert.match(
+      list,
+      /alert\(1\)&lt;\/script&gt;<\/a>\n.*\n.*\n.*<\/time><\/span><span class="badge" title="Open comment threads">2 open comments<\/span>/,
+    );
+    assert.equal(list.match(/open comment/g)?.length, 1);
+    const search = await (await get(app, '/?q=x')).text();
+    assert.match(search, /2 open comments/);
+  });
+
+  it('renders the panel escaped, with threads up to this version', async () => {
+    const { app } = fakeDeps({});
+    const body = await (await get(app, '/a/a1/v/2')).text();
+    assert.match(body, /<details class="comments" id="comments" open>/);
+    assert.match(body, /<button type="button" id="comment-on-selection" hidden>/);
+    assert.ok(body.includes('Fix &lt;script&gt;alert(2)&lt;/script&gt;'));
+    assert.ok(!body.includes('<script>alert(2)'));
+    assert.ok(body.includes('agent &lt;x&gt; <span class="badge">agent</span>'));
+    assert.ok(body.includes('<blockquote class="quote">Quoted &quot;&lt;b&gt;&quot;</blockquote>'));
+    // Started on v3: not shown on v2.
+    assert.ok(!body.includes('thread-th-new'));
+    assert.ok(!body.includes('Old quote'));
+    assert.match(body, /name="version" value="2"/);
+    assert.match(body, /<span class="badge">1 open<\/span>/);
+  });
+
+  it('marks older threads, keeps resolved ones apart, and highlights only open quotes', async () => {
+    const { app } = fakeDeps({});
+    const body = await (await get(app, '/a/a1')).text();
+    assert.match(
+      body,
+      /id="thread-th-open" data-exact="Quoted &quot;&lt;b&gt;&quot;" data-prefix="before &lt;" data-suffix="&gt; after">/,
+    );
+    assert.match(body, /title="Started on version 2">on v2<\/span>/);
+    assert.match(body, /<article class="thread done" id="thread-th-done">/);
+    assert.match(body, /<details class="resolved"><summary>1 resolved thread<\/summary>/);
+    assert.equal(body.match(/data-exact=/g)?.length, 1);
+    assert.match(body, /value="1">Resolve<\/button>/);
+    assert.match(body, /value="0">Reopen<\/button>/);
+    assert.match(body, /<span class="badge">2 open<\/span>/);
+  });
+
+  it('loads its script from /static/app.js, allowed by script-src self', async () => {
+    const { app } = fakeDeps({});
+    const res = await get(app, '/a/a1');
+    const body = await res.text();
+    assert.match(body, /<script src="\/static\/app\.js\?v=[0-9a-f]{12}" defer><\/script>/);
+    assert.equal(body.match(/<script/g)?.length, 1);
+    assert.match(res.headers.get('content-security-policy') ?? '', /script-src 'self';/);
+
+    const js = await get(app, '/static/app.js');
+    assert.equal(js.status, 200);
+    assert.equal(js.headers.get('content-type'), 'text/javascript; charset=utf-8');
+    assert.match(await js.text(), /aa:selection/);
+  });
+
+  it('posts a note as the signed-in owner, typed, whatever the form says', async () => {
+    const { app, added } = fakeDeps({});
+    const res = await post(
+      app,
+      '/a/a1/comments',
+      { body: 'Hello', version: '2', typed: '0', author: 'someone@else' },
+      APP,
+    );
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), '/a/a1/v/2#thread-th-created');
+    assert.deepEqual(added, [
+      {
+        input: { artifactId: 'a1', body: 'Hello', version: 2, anchor: { kind: 'note' } },
+        author: { name: 'owner@example.com', typed: true },
+      },
+    ]);
+  });
+
+  it('posts a text anchor, and returns to the plain URL on the latest version', async () => {
+    const { app, added } = fakeDeps({});
+    const res = await post(
+      app,
+      '/a/a1/comments',
+      { body: 'Hm', version: '3', exact: 'Hi', prefix: 'a', suffix: 'b' },
+      APP,
+    );
+    assert.equal(res.headers.get('location'), '/a/a1#thread-th-created');
+    assert.deepEqual(added[0]?.input.anchor, {
+      kind: 'text',
+      exact: 'Hi',
+      prefix: 'a',
+      suffix: 'b',
+    });
+  });
+
+  it('replies without an anchor or version', async () => {
+    const { app, added } = fakeDeps({});
+    const res = await post(
+      app,
+      '/a/a1/comments',
+      { body: 'More', threadId: 'th-open', version: '3', exact: 'ignored' },
+      APP,
+    );
+    assert.equal(res.headers.get('location'), '/a/a1#thread-th-open');
+    assert.deepEqual(added[0]?.input, { artifactId: 'a1', threadId: 'th-open', body: 'More' });
+    assert.equal(
+      (await post(app, '/a/a1/comments', { body: 'x', threadId: 'nope' }, APP)).status,
+      404,
+    );
+  });
+
+  it('needs the app Origin to post or resolve', async () => {
+    const { app, added, resolved } = fakeDeps({});
+    assert.equal((await post(app, '/a/a1/comments', { body: 'x' })).status, 403);
+    assert.equal((await post(app, '/a/a1/comments', { body: 'x' }, CONTENT)).status, 403);
+    assert.equal((await post(app, '/a/a1/comments/th-open/resolve', {}, CONTENT)).status, 403);
+    assert.deepEqual(added, []);
+    assert.deepEqual(resolved, []);
+  });
+
+  it('shows a refused comment as a 400', async () => {
+    const { app } = fakeDeps({
+      comments: {
+        add: async () => {
+          throw new AppError('invalid_input', 'A comment is 1 to 2000 characters, not 2001');
+        },
+      },
+    });
+    const res = await post(app, '/a/a1/comments', { body: 'x'.repeat(2001) }, APP);
+    assert.equal(res.status, 400);
+    assert.match(await res.text(), /1 to 2000 characters/);
+  });
+
+  it('resolves and reopens within the artifact, posting a typed reply first', async () => {
+    const { app, added, resolved } = fakeDeps({});
+    const res = await post(
+      app,
+      '/a/a1/comments/th-open/resolve',
+      { resolved: '1', version: '2', body: 'Thanks' },
+      APP,
+    );
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), '/a/a1/v/2#thread-th-open');
+    assert.deepEqual(added[0]?.input, { artifactId: 'a1', threadId: 'th-open', body: 'Thanks' });
+    await post(app, '/a/a1/comments/th-open/resolve', { resolved: '0', body: ' ' }, APP);
+    assert.equal(added.length, 1);
+    assert.equal((await post(app, '/a/p1/comments/th-open/resolve', {}, APP)).status, 404);
+    assert.deepEqual(resolved, [
+      ['th-open', true, 'a1'],
+      ['th-open', false, 'a1'],
+      ['th-open', true, 'p1'],
+    ]);
+  });
+
+  it('is not found for a deleted or unknown artifact', async () => {
+    const { app } = fakeDeps({ comments: { list: async () => null } });
+    assert.equal((await get(app, '/a/a1')).status, 404);
   });
 });

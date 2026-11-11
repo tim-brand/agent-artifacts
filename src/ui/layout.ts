@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { html, raw } from 'hono/html';
 
 export type Html = ReturnType<typeof html>;
@@ -53,25 +54,41 @@ pre{background:var(--soft);border:1px solid var(--line);border-radius:6px;paddin
 code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .snippet{position:relative}.snippet button{position:absolute;top:.4rem;right:.4rem;font-size:.75rem;padding:.1rem .5rem}
 .token{display:block;word-break:break-all;font-size:.95rem;margin:.5rem 0}
+[hidden]{display:none!important}
+.viewer{flex:1;display:flex;gap:1rem;min-height:24rem}
+.frame{position:relative;flex:1 1 auto;display:flex;min-width:0}
+.frame iframe.artifact{min-height:0}
+#comment-on-selection{position:absolute;left:50%;bottom:1rem;transform:translateX(-50%);background:var(--accent);color:#fff;border-color:var(--accent);box-shadow:0 2px 8px rgba(0,0,0,.25)}
+details.comments{flex:0 0 22rem;min-width:0;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:6px;padding:.5rem .75rem;overflow:auto;max-height:calc(100vh - 10rem)}
+details.comments:not([open]){flex-basis:auto}
+details.comments>summary{cursor:pointer;font-weight:500}
+.comments textarea{display:block;width:100%;font:inherit;padding:.35rem .5rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);resize:vertical}
+.comments form{margin:.5rem 0}.comments form .row{display:flex;gap:.5rem;justify-content:flex-end;margin-top:.35rem}
+.thread{border-top:1px solid var(--line);padding:.6rem 0}
+.thread ol{list-style:none;margin:0;padding:0}.thread li{margin:.35rem 0}
+.thread .who{font-size:.8rem;color:var(--muted)}
+.thread .text{white-space:pre-wrap;overflow-wrap:anywhere;margin:.1rem 0}
+.quote{margin:.25rem 0;padding:.15rem .6rem;border-left:3px solid #d4a017;color:var(--muted);font-size:.9rem;overflow-wrap:anywhere;max-height:6.5em;overflow:hidden}
+.thread.done{opacity:.75}
+details.resolved>summary{cursor:pointer;color:var(--muted);margin:.5rem 0}
+@media (max-width:60rem){.viewer{flex-direction:column}.frame{min-height:24rem}details.comments{flex:none;max-height:none}}
 @media (max-width:40rem){main{padding:.75rem}header{padding:.5rem .75rem;gap:.75rem}}
 `;
 
-// Copy buttons ([data-copy] = id of the element to copy) and confirm prompts (form[data-confirm]).
-const SCRIPT = `
-document.addEventListener('click',function(e){var b=e.target.closest('[data-copy]');if(!b)return;var t=document.getElementById(b.dataset.copy);if(!t)return;navigator.clipboard.writeText(t.textContent).then(function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy'},1500)})});
-document.addEventListener('submit',function(e){var m=e.target.dataset.confirm;if(m&&!confirm(m))e.preventDefault()});
-`;
+/** The client code, served by the UI at /static/app.js; the version in its URL busts caches. */
+export const APP_JS = readFileSync(new URL('./static/app.js', import.meta.url), 'utf8');
+const APP_JS_URL = `/static/app.js?v=${createHash('sha256').update(APP_JS).digest('hex').slice(0, 12)}`;
 
 const sha256 = (text: string) => `'sha256-${createHash('sha256').update(text).digest('base64')}'`;
 
-/** No inline script or style is allowed beyond the two blocks above, pinned by their hashes. */
+/** No inline script, and no inline style beyond the block above, pinned by its hash. */
 export function contentSecurityPolicy(contentOrigin: string): string {
   return [
     "default-src 'self'",
     `frame-src ${contentOrigin}`,
     "img-src 'self' data:",
     `style-src ${sha256(STYLE)}`,
-    `script-src ${sha256(SCRIPT)}`,
+    "script-src 'self'",
     "form-action 'self'",
     "frame-ancestors 'none'",
     "base-uri 'none'",
@@ -98,7 +115,7 @@ export function layout(opts: {
 <meta name="referrer" content="same-origin">
 <title>${opts.title} · Agent Artifacts</title>
 <style>${raw(STYLE)}</style>
-<script>${raw(SCRIPT)}</script>
+<script src="${APP_JS_URL}" defer></script>
 </head>
 <body>
 <header>

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { Hono, type HonoRequest } from 'hono';
 import type { ArtifactService, Deps } from '../contracts.ts';
 import { createRateLimiter } from './rate-limit.ts';
@@ -12,6 +14,10 @@ import { renderCode, renderImage, renderMarkdown } from './render.ts';
  *   PDFs, which Chrome won't render sandboxed; they still get frame-ancestors;
  * - only the app origin may frame /s/, and nothing may frame /p/;
  * - nothing here ever sets a cookie.
+ *
+ * The one script this host adds to a page is the frame bridge (/_aa/bridge.js), on html and markdown
+ * entries under /s/: the links the app's artifact page frames. It lets the reader comment on a
+ * selection. Public links (/p/) never get it: their policy has `bridge: null`.
  */
 
 const SANDBOX =
@@ -22,24 +28,42 @@ const PINNED_MAX_AGE = 300;
 const TEXT = 'text/plain; charset=utf-8';
 const HTML = 'text/html; charset=utf-8';
 
+/** The frame bridge's script tag, and its hash for ETags. */
+type Bridge = { tag: Uint8Array; hash: string };
+
 /** How /s/ and /p/ responses differ. */
 type Policy = {
   frameAncestors: string;
   cacheControl: string;
   headers?: Record<string, string>;
+  /** Appended to html and markdown entries; null for none. */
+  bridge: Bridge | null;
 };
 
 const PUBLIC: Policy = {
   frameAncestors: "'none'",
   cacheControl: 'no-store',
   headers: { 'X-Robots-Tag': 'noindex, nofollow' },
+  // A public link is opened top-level, by anyone: no app to talk to, so never the bridge.
+  bridge: null,
 };
 
 type Target = { exp: number; sig: string; id: string; version: number; path: string[] };
 
+const BRIDGE_PATH = '/_aa/bridge.js';
+const BRIDGE_SOURCE = readFileSync(new URL('./bridge.js', import.meta.url), 'utf8');
+
 export function createContentRoutes(deps: Deps): Hono {
   const app = new Hono();
-  const signed: Policy = { frameAncestors: deps.config.appOrigin, cacheControl: 'no-store' };
+  const { appOrigin } = deps.config;
+  // The bridge posts to, and only listens to, the app origin.
+  const bridgeSource = BRIDGE_SOURCE.replace("'__APP_ORIGIN__'", JSON.stringify(appOrigin));
+  const bridgeHash = createHash('sha256').update(bridgeSource).digest('hex').slice(0, 16);
+  const bridge: Bridge = {
+    tag: new TextEncoder().encode(`\n<script src="${BRIDGE_PATH}?v=${bridgeHash}"></script>\n`),
+    hash: bridgeHash,
+  };
+  const signed: Policy = { frameAncestors: appOrigin, cacheControl: 'no-store', bridge };
   const limiter = createRateLimiter({ capacity: 60, perMinute: 60 });
 
   const error = (status: 403 | 404 | 429 | 500, message: string, policy = signed) =>
@@ -47,6 +71,14 @@ export function createContentRoutes(deps: Deps): Hono {
       status,
       headers: { ...securityHeaders(TEXT, policy), 'Cache-Control': 'no-store' },
     });
+
+  // Unsigned: the script is the same for everyone. The ?v= in its URL changes with it.
+  app.get(BRIDGE_PATH, () => {
+    const policy = { ...signed, cacheControl: 'public, max-age=86400' };
+    return new Response(bridgeSource, {
+      headers: securityHeaders('text/javascript; charset=utf-8', policy),
+    });
+  });
 
   const signedFile = async (req: HonoRequest, pathname: string) => {
     const target = parse(pathname);
@@ -116,7 +148,10 @@ export function createContentRoutes(deps: Deps): Hono {
   return app;
 }
 
-/** One file of a version, rendered when it's a markdown, code or image entry. Null when not found. */
+/**
+ * One file of a version, rendered when it's a markdown, code or image entry, with the policy's
+ * bridge on html and markdown entries. Null when not found.
+ */
 async function serveFile(
   artifacts: ArtifactService,
   req: HonoRequest,
@@ -131,26 +166,42 @@ async function serveFile(
   if (!file) return null;
 
   const { format, entry, files } = found.version;
+  const raw = req.query('raw') === '1';
   const render =
-    path === entry &&
-    (format === 'markdown' || format === 'code' || format === 'image') &&
-    req.query('raw') !== '1';
+    path === entry && (format === 'markdown' || format === 'code' || format === 'image') && !raw;
+  const bridge =
+    path === entry && (format === 'html' || format === 'markdown') && !raw ? policy.bridge : null;
   const sha256 = files.find((f) => f.path === path)?.sha256;
   const contentType = render ? HTML : file.contentType;
   const headers = securityHeaders(contentType, policy);
   // Version content is immutable, so the file hash is a strong validator.
-  if (sha256) headers.ETag = `"${sha256}${render ? '-rendered' : ''}"`;
+  if (sha256) {
+    const variant = `${render ? '-rendered' : ''}${bridge ? `-bridge-${bridge.hash}` : ''}`;
+    headers.ETag = `"${sha256}${variant}"`;
+  }
   if (headers.ETag && req.header('if-none-match') === headers.ETag) {
     return new Response(null, { status: 304, headers });
   }
 
-  if (!render) return new Response(file.bytes as Uint8Array<ArrayBuffer>, { headers });
   const { title } = found.artifact;
-  if (format === 'image') return new Response(renderImage(title, path), { headers });
-  const source = new TextDecoder().decode(file.bytes);
-  const body =
-    format === 'markdown' ? renderMarkdown(title, source) : renderCode(title, path, source);
-  return new Response(body, { headers });
+  let body: Uint8Array | string = file.bytes;
+  if (render && format === 'image') body = renderImage(title, path);
+  else if (render) {
+    const source = new TextDecoder().decode(file.bytes);
+    body = format === 'markdown' ? renderMarkdown(title, source) : renderCode(title, path, source);
+  }
+  // Appended after everything, so it can't land inside the doctype, the head or a script; the
+  // parser moves it into the body.
+  if (bridge) body = concat(body, bridge.tag);
+  return new Response(body as Uint8Array<ArrayBuffer> | string, { headers });
+}
+
+function concat(body: Uint8Array | string, tail: Uint8Array): Uint8Array {
+  const head = typeof body === 'string' ? new TextEncoder().encode(body) : body;
+  const out = new Uint8Array(head.byteLength + tail.byteLength);
+  out.set(head);
+  out.set(tail, head.byteLength);
+  return out;
 }
 
 function securityHeaders(contentType: string, policy: Policy): Record<string, string> {

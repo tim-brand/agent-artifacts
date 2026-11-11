@@ -30,6 +30,9 @@ A query is plain words: every word must match, the last also as a prefix, and ac
 | `delete_artifact`   | Moves an artifact to the trash                                                                                                                                       |
 | `undelete_artifact` | Brings it back from the trash                                                                                                                                        |
 | `list_share_links`  | Public share links of an artifact, or of all of them (read only; see Public share links)                                                                             |
+| `list_comments`     | Comment threads on an artifact, newest activity first (see Comments)                                                                                                 |
+| `add_comment`       | Starts a thread (a note, or on a quoted passage) or replies to one                                                                                                   |
+| `resolve_comment`   | Resolves or reopens a thread                                                                                                                                         |
 
 Each `old` in `edits` must occur exactly once at its step, or nothing is published and the call fails with `edit_failed` (`details: { index, occurrences }`). Edits work on html, markdown and code entries.
 
@@ -42,6 +45,18 @@ To show one artifact to someone without an Authentik account, open the Share sec
 Only the web UI creates or revokes links. Making something public is the owner's decision, so MCP has just the read-only `list_share_links`, so an agent can tell where its work is visible.
 
 Responses under `/p/` differ from the signed `/s/` ones: `frame-ancestors 'none'` (they're opened top-level, not framed), `X-Robots-Tag: noindex, nofollow`, and `Cache-Control: no-store` for latest links (pinned ones may be cached for 5 minutes). An unknown, revoked or expired token, or one whose artifact is deleted, gets the same 404. A deleted artifact's links work again if it is restored. `/p/` is rate limited to 60 requests a minute per client IP, in memory, keyed on the first `X-Forwarded-For` entry, which the ingress sets.
+
+## Comments
+
+The owner comments on an artifact in the web UI, and agents read and answer them over MCP: `list_comments`, `add_comment` (new thread or reply) and `resolve_comment`. `list_artifacts` gives each artifact's `openComments`, and the list page shows them as a badge.
+
+- A thread is a note on the whole artifact, or is anchored to a passage as a W3C TextQuoteSelector: the quoted `exact` text, with up to 32 characters of `prefix` and `suffix`. It belongs to the version it was started on, and is shown on that version and later ones, marked "on v2" on the later ones.
+- A comment is 1 to 2,000 characters. `typed` is true only for comments posted from the web UI, and the server sets it from the route, never from input. The author is the signed-in email for those, and the token's name for agent comments. The MCP tools tell agents that a `typed` comment is the owner's own words and that all other comment text, and any quoted text, is data, not instructions.
+- A deleted artifact's comments are hidden with it. Threads and comments reference the artifact with `ON DELETE CASCADE`, so deleting the artifact row for good removes them.
+
+**Text anchors.** On html and markdown entries opened through the app's signed `/s/` links, the content host appends one script, `/_aa/bridge.js`, served from the content host itself. It's the only script that host adds, and public `/p/` links never get it. When the reader selects text, it posts `{ type: 'aa:selection', exact, prefix, suffix }` to the app, which then offers "Comment on selection". The app sends the quotes of open threads back (`aa:highlight`), and the bridge wraps the best match of each in `<mark>`. The app accepts a frame message only when `event.source` is the artifact iframe's window (a sandboxed frame's origin is `"null"`, so it can't be checked), and only for a type it handles. The artifact can post anything itself, so every field is checked, and a selection does nothing until the owner clicks and submits. Quotes are matched with whitespace collapsed, so a quote matches however the page's source wraps its text.
+
+The UI's own client code is `/static/app.js`, allowed by `script-src 'self'`. New message types for the frame bridge are added there with `onFrameMessage(type, handler)`.
 
 ## Local setup
 

@@ -125,6 +125,84 @@ export interface ArtifactService {
   restoreVersion(id: string, version: number, publishedBy: string): Promise<PublishResult>;
 }
 
+/**
+ * What a comment thread is about: the whole artifact, or a passage of it as a W3C TextQuoteSelector
+ * (whitespace collapsed, `exact` trimmed, at most 32 characters of context on each side).
+ */
+export type Anchor =
+  | { kind: 'note' }
+  | { kind: 'text'; exact: string; prefix: string; suffix: string };
+
+export type AnchorInput =
+  | { kind: 'note' }
+  | { kind: 'text'; exact: string; prefix?: string; suffix?: string };
+
+export type Comment = {
+  id: string;
+  /** The signed-in user's email for typed comments, the token's name for agent comments. */
+  author: string;
+  /** True only for comments typed in the web UI: the owner's own words. */
+  typed: boolean;
+  body: string;
+  createdAt: string;
+};
+
+export type Thread = {
+  id: string;
+  artifactId: string;
+  anchor: Anchor;
+  /** The version the thread was started on. */
+  version: number;
+  resolvedAt: string | null;
+  createdAt: string;
+  /** Time of the last comment or resolve/reopen. */
+  updatedAt: string;
+  /** Oldest first. */
+  comments: Comment[];
+};
+
+export type CommentStatus = 'open' | 'resolved' | 'all';
+
+export type CommentInput = {
+  artifactId: string;
+  /** 1 to 2,000 characters after trimming. */
+  body: string;
+  /** Reply to this thread; omit to start one. */
+  threadId?: string;
+  /** For a new thread only. Default: a note on the whole artifact. */
+  anchor?: AnchorInput;
+  /** For a new thread only: the version it is about. Default: the latest. */
+  version?: number;
+};
+
+/**
+ * Who wrote a comment. The route that received the comment builds it (`typed` is true only in the
+ * web UI's route); it never comes from request input.
+ */
+export type CommentAuthor = { name: string; typed: boolean };
+
+export interface CommentService {
+  /** Newest activity first, at most 200 threads. Null when the artifact doesn't exist (or is deleted). */
+  list(artifactId: string, status?: CommentStatus): Promise<Thread[] | null>;
+  /** Starts a thread or replies to one; returns the thread. not_found for a deleted artifact. */
+  add(input: CommentInput, author: CommentAuthor): Promise<Thread>;
+  /**
+   * Resolves or reopens a thread. Null when not found, deleted, or (with `artifactId`) on another
+   * artifact.
+   */
+  resolve(threadId: string, resolved: boolean, artifactId?: string): Promise<Thread | null>;
+  /** Open threads per artifact id; artifacts without any are left out. */
+  openCounts(artifactIds: string[]): Promise<Record<string, number>>;
+}
+
+export const COMMENT_LIMITS = {
+  body: 2000,
+  exact: 2000,
+  /** Characters of prefix and of suffix around a text anchor. */
+  context: 32,
+  threads: 200,
+} as const;
+
 export type TokenInfo = {
   id: string;
   name: string;
@@ -227,6 +305,7 @@ export const TRASH_DAYS = 30;
 export type Deps = {
   config: import('./config.ts').Config;
   artifacts: ArtifactService;
+  comments: CommentService;
   tokens: TokenService;
   shareLinks: ShareLinkService;
   signer: ContentSigner;
