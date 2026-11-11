@@ -8,6 +8,7 @@ import {
   type Deps,
   type PublishInput,
   type SearchQuery,
+  type ShareLink,
   type TokenInfo,
   type Version,
 } from '../contracts.ts';
@@ -39,6 +40,23 @@ const version: Version = {
   files: [{ path: 'README.md', size: 7, contentType: 'text/markdown', sha256: 'x' }],
   createdAt: '2026-01-02T00:00:00Z',
   publishedBy: 'claude-laptop',
+};
+
+const pinnedLink: ShareLink = {
+  id: 'l1',
+  artifactId: 'art1',
+  version: 2,
+  label: 'family',
+  createdAt: '2026-01-03T00:00:00Z',
+  expiresAt: null,
+  lastUsedAt: null,
+};
+const expiredLink: ShareLink = {
+  ...pinnedLink,
+  id: 'l2',
+  version: null,
+  label: '',
+  expiresAt: '2026-01-04T00:00:00Z',
 };
 
 function setup(overrides: Partial<ArtifactService> = {}) {
@@ -82,6 +100,11 @@ function setup(overrides: Partial<ArtifactService> = {}) {
     },
     ...overrides,
   };
+  const shareCalls: string[] = [];
+  const record = (name: string) => async () => {
+    shareCalls.push(name);
+    throw new Error(`${name} must not be reachable from MCP`);
+  };
   const deps: Deps = {
     config: {
       port: 3000,
@@ -98,11 +121,21 @@ function setup(overrides: Partial<ArtifactService> = {}) {
       revoke: async () => false,
       verify: async (token) => (token === TOKEN ? tokenInfo : null),
     },
+    shareLinks: {
+      async list(id) {
+        shareCalls.push('list');
+        if (id === undefined) return [pinnedLink, expiredLink];
+        return id === 'art1' ? [pinnedLink, expiredLink] : null;
+      },
+      create: record('create'),
+      revoke: record('revoke'),
+      resolve: record('resolve'),
+    },
     signer: { url: () => '', verify: () => false },
   };
   const app = new Hono();
   app.route('/mcp', createMcpRoutes(deps));
-  return { app, published, searched, restored };
+  return { app, published, searched, restored, shareCalls };
 }
 
 let nextId = 1;
@@ -176,6 +209,7 @@ test('initialize and tools/list', async () => {
     'delete_artifact',
     'get_artifact',
     'list_artifacts',
+    'list_share_links',
     'list_versions',
     'publish_artifact',
     'restore_version',
@@ -334,4 +368,31 @@ test('restore_version and undelete_artifact', async () => {
   assert.deepEqual(undeleted.json, { undeleted: true, url: 'https://app.test/a/art1' });
   const notInTrash = await callTool(app, 'undelete_artifact', { id: 'nope' });
   assert.equal(notInTrash.json.error, 'not_found');
+});
+
+test('list_share_links lists links read-only, and no tool can create or revoke one', async () => {
+  const { app, shareCalls } = setup();
+  const { result, json } = await callTool(app, 'list_share_links', { id: 'art1' });
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(json.links, [
+    { ...pinnedLink, active: true },
+    { ...expiredLink, active: false },
+  ]);
+  assert.equal((await callTool(app, 'list_share_links', {})).json.links.length, 2);
+  const missing = await callTool(app, 'list_share_links', { id: 'nope' });
+  assert.equal(missing.json.error, 'not_found');
+
+  // Every tool, called with arguments that could plausibly mean "share this".
+  const list = await rpc(app, 'tools/list', {});
+  const tools: { name: string }[] = (await list.json()).result.tools;
+  for (const { name } of tools) {
+    const args = { id: 'art1', query: 'x', title: 'x', content: 'x', format: 'html', public: true };
+    assert.equal((await rpc(app, 'tools/call', { name, arguments: args })).status, 200);
+  }
+  assert.ok(shareCalls.length > 0);
+  assert.deepEqual(new Set(shareCalls), new Set(['list']));
+  assert.deepEqual(
+    tools.map((t) => t.name).filter((n) => /share|link|public/.test(n)),
+    ['list_share_links'],
+  );
 });

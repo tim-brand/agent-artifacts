@@ -40,10 +40,11 @@ details.menu ul{position:absolute;z-index:1;margin:.25rem 0 0;padding:.25rem 0;l
 details.menu li a{display:block;padding:.3rem .75rem;color:var(--fg)}
 details.menu li a[aria-current=page]{background:var(--soft);font-weight:500}
 details.files{margin:0 0 .75rem}details.files ul{margin:.25rem 0;padding-left:1.25rem}
+details.share{margin:0 0 .75rem}details.share summary{cursor:pointer}
 iframe.artifact{flex:1 1 auto;width:100%;min-height:24rem;border:1px solid var(--line);border-radius:6px;background:#fff}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.45rem .5rem;border-bottom:1px solid var(--line)}th{color:var(--muted);font-weight:500;font-size:.85rem}
 form.inline{display:inline}
-input[type=text],input[type=search]{font:inherit;padding:.35rem .5rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);min-width:16rem}
+input[type=text],input[type=search],select{font:inherit;padding:.35rem .5rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);min-width:16rem}
 button{font:inherit;padding:.3rem .8rem;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--fg);cursor:pointer}
 button.danger{color:var(--danger)}
 .notice{padding:.75rem 1rem;border:1px solid var(--line);border-radius:8px;background:var(--soft);margin:1rem 0}

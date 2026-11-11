@@ -8,6 +8,9 @@ import {
   type ContentSigner,
   type Deps,
   type SearchQuery,
+  type ShareLink,
+  type ShareLinkInput,
+  type ShareLinkService,
   type TokenInfo,
   type TokenService,
   type Version,
@@ -133,6 +136,34 @@ function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<Art
     verify: async () => null,
   };
 
+  const links: ShareLink[] = [];
+  const shared: { artifactId: string; input?: ShareLinkInput }[] = [];
+  const shareLinks: ShareLinkService = {
+    create: async (artifactId, input) => {
+      shared.push({ artifactId, input });
+      if (!list.some((a) => a.id === artifactId)) throw new AppError('not_found', 'gone');
+      const link: ShareLink = {
+        id: `l${links.length + 1}`,
+        artifactId,
+        version: input?.version ?? null,
+        label: input?.label ?? '',
+        createdAt: new Date().toISOString(),
+        expiresAt: input?.expiresAt ?? null,
+        lastUsedAt: null,
+      };
+      links.unshift(link);
+      return { token: `sl_secret${links.length}`, link };
+    },
+    list: async (id) =>
+      list.some((a) => a.id === id) ? links.filter((l) => l.artifactId === id) : null,
+    revoke: async (artifactId, id) => {
+      const index = links.findIndex((l) => l.id === id && l.artifactId === artifactId);
+      if (index >= 0) links.splice(index, 1);
+      return index >= 0;
+    },
+    resolve: async () => null,
+  };
+
   const signer: ContentSigner = {
     url: (id, v, path) => `${CONTENT}/s/9.sig/${id}/${v}/${path}`,
     verify: () => true,
@@ -147,8 +178,8 @@ function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<Art
     devUser: null,
     ...overrides.config,
   };
-  const deps: Deps = { config, artifacts, tokens, signer };
-  return { app: createUiRoutes(deps), deleted, searched, undeleted, restored };
+  const deps: Deps = { config, artifacts, tokens, shareLinks, signer };
+  return { app: createUiRoutes(deps), deleted, searched, undeleted, restored, shared, links };
 }
 
 const get = (app: ReturnType<typeof fakeDeps>['app'], path: string) =>
@@ -482,5 +513,101 @@ describe('connect', () => {
     );
     assert.ok(body.includes('{file:~/.agent-artifacts-token}'));
     assert.match(body, /href="\/settings\/tokens"/);
+  });
+});
+
+describe('share links', () => {
+  it('shows a share form on the artifact page, collapsed, with the page version to pin', async () => {
+    const { app } = fakeDeps({});
+    const body = await (await get(app, '/a/a1/v/2')).text();
+    assert.match(body, /<details class="share">\n<summary>Share<\/summary>/);
+    assert.match(body, /<form method="post" action="\/a\/a1\/share"/);
+    assert.match(body, /<option value="latest">Always the latest version<\/option>/);
+    assert.match(body, /<option value="2">Only version 2<\/option>/);
+    assert.match(body, /No public links\./);
+  });
+
+  it('creates a link, shows its URL once with a copy button, then lists it', async () => {
+    const { app, shared } = fakeDeps({});
+    const res = await post(
+      app,
+      '/a/a1/share',
+      { version: 'latest', label: 'mum <3', expires: '' },
+      APP,
+    );
+    const body = await res.text();
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(shared, [
+      { artifactId: 'a1', input: { version: undefined, label: 'mum <3', expiresAt: undefined } },
+    ]);
+    assert.match(
+      body,
+      /<code id="share-url" class="token">https:\/\/content\.test\/p\/sl_secret1\/<\/code>/,
+    );
+    assert.match(body, /data-copy="share-url"/);
+    assert.match(body, /<details class="share" open>/);
+    assert.ok(body.includes('mum &lt;3'));
+    assert.ok(!body.includes('mum <3'));
+
+    const page = await (await get(app, '/a/a1')).text();
+    assert.ok(!page.includes('sl_secret1'));
+    assert.match(page, /Share · 1 public link</);
+    assert.match(page, /<td>Latest version<\/td>/);
+    assert.match(page, /action="\/a\/a1\/share\/l1\/revoke"/);
+  });
+
+  it('pins a version and sets an expiry', async () => {
+    const { app, shared } = fakeDeps({});
+    const before = Date.now();
+    const res = await post(app, '/a/a1/share', { version: '2', label: '', expires: '7' }, APP);
+    assert.equal(res.status, 200);
+    const input = shared[0]?.input;
+    assert.equal(input?.version, 2);
+    const expires = Date.parse(input?.expiresAt ?? '');
+    assert.ok(expires >= before + 7 * 86_400_000 && expires <= Date.now() + 7 * 86_400_000);
+    const body = await res.text();
+    assert.match(body, /Version 2 of 3/);
+    assert.match(body, /<a href="\/a\/a1\/v\/2">Version 2<\/a>/);
+  });
+
+  it('refuses a foreign Origin, a bad version or expiry, and an unknown artifact', async () => {
+    const { app, shared } = fakeDeps({});
+    const form = { version: 'latest', label: '', expires: '' };
+    assert.equal((await post(app, '/a/a1/share', form)).status, 403);
+    assert.equal((await post(app, '/a/a1/share', form, CONTENT)).status, 403);
+    assert.deepEqual(shared, []);
+    assert.equal((await post(app, '/a/a1/share', { ...form, version: '0' }, APP)).status, 400);
+    assert.equal((await post(app, '/a/a1/share', { ...form, expires: '365' }, APP)).status, 400);
+    assert.deepEqual(shared, []);
+    assert.equal((await post(app, '/a/nope/share', form, APP)).status, 404);
+  });
+
+  it('revokes a link of this artifact only', async () => {
+    const { app, links } = fakeDeps({});
+    await post(app, '/a/a1/share', { version: 'latest', label: '', expires: '' }, APP);
+    assert.equal((await post(app, '/a/p1/share/l1/revoke', {}, APP)).status, 404);
+    assert.equal((await post(app, '/a/a1/share/l1/revoke', {})).status, 403);
+    assert.equal(links.length, 1);
+    const res = await post(app, '/a/a1/share/l1/revoke', {}, APP);
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), '/a/a1');
+    assert.equal(links.length, 0);
+    assert.equal((await post(app, '/a/a1/share/l1/revoke', {}, APP)).status, 404);
+  });
+
+  it('marks an expired link', async () => {
+    const { app, links } = fakeDeps({});
+    links.push({
+      id: 'old',
+      artifactId: 'a1',
+      version: null,
+      label: 'old',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2026-01-02T00:00:00.000Z',
+      lastUsedAt: '2026-01-01T12:00:00.000Z',
+    });
+    const body = await (await get(app, '/a/a1')).text();
+    assert.match(body, /<span class="badge">expired<\/span>/);
   });
 });

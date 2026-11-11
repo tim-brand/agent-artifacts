@@ -13,6 +13,7 @@ import { createUiRoutes } from './ui/routes.ts';
  *   /*        web UI, trusts X-authentik-email (ui/)
  * Content host (no forward auth, no cookies):
  *   /s/...    signed artifact files (content/)
+ *   /p/...    public share links, rate limited (content/)
  *
  * Security: forward auth is skipped on /mcp, so a client can send any X-authentik-* header there.
  * Only ui/ may read those headers, and ui/ must never be mounted on a path the ingress leaves open.
