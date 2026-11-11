@@ -94,6 +94,31 @@ test('markdown renders as under /s/', async (t) => {
   assert.equal(await raw.text(), '# Hello');
 });
 
+test('public links never get the comment bridge, which /s/ adds to the same entries', async (t) => {
+  const { artifacts, shareLinks, signer, get, site } = setup(t);
+  const html = await artifacts.publish({ title: 'Site', ...site('one') }, 'a');
+  const md = await artifacts.publish({ title: 'Doc', content: '# Hi', format: 'markdown' }, 'a');
+  for (const [id, entry] of [
+    [html.id, 'docs/index.html'],
+    [md.id, 'README.md'],
+  ] as const) {
+    const signed = await get(new URL(signer.url(id, 1, entry)).pathname);
+    assert.match(
+      await signed.text(),
+      /<script src="\/_aa\/bridge\.js\?v=[0-9a-f]{16}"><\/script>\n$/,
+    );
+
+    const { token } = await shareLinks.create(id);
+    const pinned = await shareLinks.create(id, { version: 1 });
+    for (const link of [token, pinned.token]) {
+      const res = await get(`/p/${link}/${entry}`);
+      assert.equal(res.status, 200);
+      assert.doesNotMatch(await res.text(), /bridge\.js/, entry);
+      assert.doesNotMatch(res.headers.get('etag') ?? '', /bridge/);
+    }
+  }
+});
+
 test('a latest link follows new versions; a pinned one stays and may be cached', async (t) => {
   const { artifacts, shareLinks, get, site } = setup(t);
   const { id } = await artifacts.publish({ title: 'Site', ...site('one') }, 'a');
