@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { type TestContext, test } from 'node:test';
 import type { Config } from '../config.ts';
 import { AppError } from '../contracts.ts';
@@ -41,7 +42,7 @@ function setup(t: TestContext) {
       .filter((e) => e.isFile())
       .map((e) => e.name)
       .sort();
-  return { ...core, blobsDir, blobNames };
+  return { ...core, config, blobsDir, blobNames };
 }
 
 const failsWith = (c: AppError['code'], details?: Record<string, unknown>) => (error: unknown) => {
@@ -332,4 +333,81 @@ test('schedulePurge runs at once and then every interval', async (t) => {
   stop();
   t.mock.timers.tick(HOUR * 5);
   assert.equal(runs, 3);
+});
+
+const found = async (artifacts: ReturnType<typeof setup>['artifacts'], query: string) =>
+  (await artifacts.search({ query })).items.map((hit) => hit.artifact.id);
+
+test('search follows edits', async (t) => {
+  const { artifacts } = setup(t);
+  const { id } = await artifacts.publish(
+    { title: 'Notes', content: '<p>The walrus sleeps</p>', format: 'html' },
+    'a',
+  );
+  assert.deepEqual(await found(artifacts, 'walrus'), [id]);
+  await artifacts.publish({ id, edits: [{ old: 'walrus', new: 'narwhal' }] }, 'a');
+  assert.deepEqual(await found(artifacts, 'walrus'), []);
+  assert.deepEqual(await found(artifacts, 'narwhal'), [id]);
+  await assert.rejects(
+    artifacts.publish({ id, edits: [{ old: 'missing', new: 'kraken' }] }, 'a'),
+    failsWith('edit_failed'),
+  );
+  assert.deepEqual(await found(artifacts, 'kraken'), []);
+});
+
+test('search finds the text of a restored version', async (t) => {
+  const { artifacts } = setup(t);
+  const { id } = await artifacts.publish(
+    { title: 'Plan', content: 'alpha plan', format: 'markdown' },
+    'a',
+  );
+  await artifacts.publish({ id, content: 'beta plan', format: 'markdown' }, 'a');
+  assert.deepEqual(await found(artifacts, 'alpha'), []);
+  await artifacts.restoreVersion(id, 1, 'owner');
+  assert.deepEqual(await found(artifacts, 'alpha'), [id]);
+  assert.deepEqual(await found(artifacts, 'beta'), []);
+});
+
+test('an undeleted artifact is searchable again, a purged one leaves no search row', async (t) => {
+  const { artifacts, purge, config } = setup(t);
+  const { id } = await artifacts.publish(
+    { title: 'Zebra', content: 'stripes', format: 'markdown' },
+    'a',
+  );
+  await artifacts.delete(id);
+  assert.deepEqual(await found(artifacts, 'stripes'), []);
+  assert.equal(await artifacts.undelete(id), true);
+  assert.deepEqual(await found(artifacts, 'zebra stripes'), [id]);
+
+  await artifacts.delete(id);
+  // A second connection, to look at the index and to plant a stale row a bug could leave behind.
+  const db = new DatabaseSync(join(config.dataDir, 'artifacts.db'));
+  t.after(() => db.close());
+  const rows = () =>
+    (db.prepare('SELECT count(*) AS n FROM artifacts_fts').get() as { n: number }).n;
+  assert.equal(rows(), 0);
+  db.prepare(
+    "INSERT INTO artifacts_fts (artifact_id, title, description, body) VALUES (?, 'Zebra', '', '')",
+  ).run(id);
+  assert.deepEqual(await purge(Date.now() + 31 * DAY), { artifacts: 1, blobs: 1 });
+  assert.equal(rows(), 0);
+});
+
+test('image artifacts, even SVG, cannot be edited', async (t) => {
+  const { artifacts } = setup(t);
+  const { id } = await artifacts.publish(
+    {
+      title: 'Chart',
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><title>Q3</title></svg>',
+      format: 'image',
+      language: 'svg',
+    },
+    'a',
+  );
+  assert.equal((await artifacts.get(id))?.artifact.format, 'image');
+  await assert.rejects(
+    artifacts.publish({ id, edits: [{ old: 'Q3', new: 'Q4' }] }, 'a'),
+    failsWith('invalid_input'),
+  );
+  assert.equal((await artifacts.get(id))?.artifact.latestVersion, 1);
 });

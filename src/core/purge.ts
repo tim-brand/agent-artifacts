@@ -17,6 +17,8 @@ export type PurgeResult = { artifacts: number; blobs: number };
  */
 export function createPurge(db: DatabaseSync, blobsDir: string) {
   const expired = db.prepare('SELECT id FROM artifacts WHERE deleted_at < ?');
+  // Delete already drops the search row; removing it again here means none can outlive its artifact.
+  const deleteSearch = db.prepare('DELETE FROM artifacts_fts WHERE artifact_id = ?');
   const deleteFiles = db.prepare('DELETE FROM version_files WHERE artifact_id = ?');
   const deleteVersions = db.prepare('DELETE FROM versions WHERE artifact_id = ?');
   const deleteArtifact = db.prepare('DELETE FROM artifacts WHERE id = ?');
@@ -27,6 +29,7 @@ export function createPurge(db: DatabaseSync, blobsDir: string) {
     const artifacts = transaction(db, () => {
       const ids = (expired.all(cutoff) as { id: string }[]).map((r) => r.id);
       for (const id of ids) {
+        deleteSearch.run(id);
         deleteFiles.run(id);
         deleteVersions.run(id);
         deleteArtifact.run(id);

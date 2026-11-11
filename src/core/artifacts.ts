@@ -305,6 +305,7 @@ export function createArtifactService(
           time,
         );
         stmt.copyFiles.run(next, id, version);
+        index.reindexArtifact(id);
         return { id, version: next, title: existing.title, url: `${appOrigin}/a/${id}` };
       });
     },
@@ -373,7 +374,11 @@ export function createArtifactService(
     },
 
     async undelete(id) {
-      return stmt.undelete.run(id).changes > 0;
+      return transaction(db, () => {
+        const undeleted = stmt.undelete.run(id).changes > 0;
+        if (undeleted) index.reindexArtifact(id);
+        return undeleted;
+      });
     },
 
     async listDeleted() {
