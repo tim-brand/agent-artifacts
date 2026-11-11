@@ -116,7 +116,7 @@ test('a latest link follows new versions; a pinned one stays and may be cached',
   assert.equal(cached.headers.get('cache-control'), 'private, max-age=300');
 });
 
-test('unknown, malformed, revoked, expired and deleted links all get the same 404', async (t) => {
+test('unknown, malformed, revoked, expired and deleted links get the same 404; undelete restores', async (t) => {
   const { artifacts, shareLinks, get, site } = setup(t);
   const { id } = await artifacts.publish({ title: 'Site', ...site('one') }, 'a');
   const make = async (expiresAt?: string) => (await shareLinks.create(id, { expiresAt })).token;
@@ -152,6 +152,10 @@ test('unknown, malformed, revoked, expired and deleted links all get the same 40
   await artifacts.delete(id);
   await notFound(`/p/${kept}/docs/index.html`);
   await notFound(`/p/${kept}/`);
+
+  await artifacts.undelete(id);
+  assert.equal((await get(`/p/${kept}/docs/index.html`)).status, 200);
+  await notFound(`/p/${revoked.token}/docs/index.html`);
 });
 
 test('/p/ is rate limited per client IP, from the first X-Forwarded-For entry', async (t) => {

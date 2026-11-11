@@ -19,7 +19,7 @@ function setup(t: TestContext) {
     devUser: null,
   };
   let core = createCore(config);
-  // A second connection, for what the app can't do yet (undelete, purge) or shouldn't (rewind time).
+  // A second connection, to look at rows directly and to rewind the schema.
   const db = new DatabaseSync(join(config.dataDir, 'artifacts.db'));
   db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   t.after(() => {
@@ -113,7 +113,7 @@ test('an expired link no longer resolves but is still listed', async (t) => {
 });
 
 test('deleting an artifact stops its links; undeleting brings them back', async (t) => {
-  const { core, db, publish } = setup(t);
+  const { core, publish } = setup(t);
   const { artifacts, shareLinks } = core();
   const id = await publish();
   const other = await publish();
@@ -129,21 +129,30 @@ test('deleting an artifact stops its links; undeleting brings them back', async 
   );
   await assert.rejects(shareLinks.create(id), code('not_found'));
 
-  // What undelete (#1) does to the artifact row.
-  db.prepare('UPDATE artifacts SET deleted_at = NULL WHERE id = ?').run(id);
+  assert.equal(await artifacts.undelete(id), true);
   assert.equal((await shareLinks.resolve(token))?.version, 1);
   assert.equal((await shareLinks.list())?.length, 2);
 });
 
-test('purging an artifact removes its links', async (t) => {
+test('purging an artifact removes its links, and only its links', async (t) => {
   const { core, db, publish } = setup(t);
+  const { artifacts, shareLinks, purge } = core();
   const id = await publish();
-  await core().shareLinks.create(id);
-  for (const table of ['version_files', 'versions']) {
-    db.prepare(`DELETE FROM ${table} WHERE artifact_id = ?`).run(id);
-  }
-  db.prepare('DELETE FROM artifacts WHERE id = ?').run(id);
-  assert.deepEqual(db.prepare('SELECT * FROM share_links').all(), []);
+  const kept = await publish();
+  await shareLinks.create(id);
+  await shareLinks.create(id, { version: 1 });
+  const { token } = await shareLinks.create(kept);
+  await artifacts.delete(id);
+
+  // The purge's own connection must enforce foreign keys, or the cascade silently does nothing.
+  assert.deepEqual(await purge(Date.now() + 31 * 86_400_000), { artifacts: 1, blobs: 0 });
+  const rows = db.prepare('SELECT artifact_id FROM share_links').all() as { artifact_id: string }[];
+  assert.deepEqual(
+    rows.map((r) => r.artifact_id),
+    [kept],
+  );
+  assert.equal((await shareLinks.resolve(token))?.version, 1);
+  assert.equal(await artifacts.undelete(id), false);
 });
 
 test('create refuses unknown artifacts and versions, long labels and past expiry', async (t) => {
