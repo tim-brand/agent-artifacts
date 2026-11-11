@@ -34,6 +34,11 @@ export type Version = {
   publishedBy: string;
 };
 
+export type DeletedArtifact = Artifact & { deletedAt: string };
+
+/** Replace `old`, which must occur exactly once, with `new`. */
+export type Edit = { old: string; new: string };
+
 export type PublishInput = {
   /** Omit for a new artifact; give it for a new version of an existing one. */
   id?: string;
@@ -50,6 +55,11 @@ export type PublishInput = {
   /** Or several files, with `entry` naming the one to open. */
   files?: Record<string, FileInput>;
   entry?: string;
+  /**
+   * Or, with `id`: edits applied in order to the latest version's entry file (html, markdown or
+   * code); the other files are reused. Fails with edit_failed when an `old` doesn't occur exactly once.
+   */
+  edits?: Edit[];
   /** For code: the language, used for the file extension and highlighting (e.g. "ts", "python"). For an image: its extension. */
   language?: string;
   /** Refuse with version_conflict when the latest version is no longer this one. */
@@ -102,8 +112,17 @@ export interface ArtifactService {
   search(query: SearchQuery): Promise<Page<SearchHit>>;
   /** Newest first. Null when the artifact doesn't exist. */
   listVersions(id: string): Promise<Version[] | null>;
-  /** Soft delete: hidden everywhere, files kept. False when not found. */
+  /** Soft delete: hidden everywhere, files kept until purged. False when not found. */
   delete(id: string): Promise<boolean>;
+  /** Brings a deleted artifact back. False when it isn't in the trash. */
+  undelete(id: string): Promise<boolean>;
+  /** The trash: deleted artifacts, most recently deleted first. */
+  listDeleted(): Promise<DeletedArtifact[]>;
+  /**
+   * Publishes a copy of an old version as the new latest, reusing its stored files.
+   * `publishedBy` gets " (restored v<n>)" appended. not_found when the artifact or version doesn't exist.
+   */
+  restoreVersion(id: string, version: number, publishedBy: string): Promise<PublishResult>;
 }
 
 export type TokenInfo = {
@@ -142,7 +161,8 @@ export class AppError extends Error {
     | 'invalid_input'
     | 'version_conflict'
     | 'too_large'
-    | 'unsupported_format';
+    | 'unsupported_format'
+    | 'edit_failed';
   readonly details?: Record<string, unknown>;
 
   constructor(code: AppError['code'], message: string, details?: Record<string, unknown>) {
@@ -159,6 +179,9 @@ export const LIMITS = {
   fileBytes: 10 * 1024 * 1024,
   files: 200,
 } as const;
+
+/** Deleted artifacts are purged for good after this many days in the trash. */
+export const TRASH_DAYS = 30;
 
 export type Deps = {
   config: import('./config.ts').Config;

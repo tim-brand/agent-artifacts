@@ -78,7 +78,7 @@ export function contentSecurityPolicy(contentOrigin: string): string {
   ].join('; ');
 }
 
-export type Nav = 'artifacts' | 'connect' | 'tokens' | null;
+export type Nav = 'artifacts' | 'connect' | 'tokens' | 'trash' | null;
 
 export function layout(opts: {
   title: string;
@@ -104,7 +104,7 @@ export function layout(opts: {
 <a class="brand" href="/">Agent Artifacts</a>
 ${
   opts.user
-    ? html`<nav>${link('/', 'Artifacts', 'artifacts')}${link('/connect', 'Connect', 'connect')}${link('/settings/tokens', 'Tokens', 'tokens')}</nav>
+    ? html`<nav>${link('/', 'Artifacts', 'artifacts')}${link('/connect', 'Connect', 'connect')}${link('/settings/tokens', 'Tokens', 'tokens')}${link('/trash', 'Trash', 'trash')}</nav>
 <span class="user">${opts.user}</span>`
     : ''
 }

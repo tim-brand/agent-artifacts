@@ -17,6 +17,23 @@ Agents search with the `search_artifacts` MCP tool, people with the search box o
 
 A query is plain words: every word must match, the last also as a prefix, and accents are ignored. FTS syntax in a query (`AND`, `NEAR`, quotes, `column:`) is matched as text. Snippets mark the matched words with `«` and `»`.
 
+## MCP tools
+
+| Tool                | Purpose                                                                                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `publish_artifact`  | A new artifact or version from `content` or `files`, or small `edits` (`[{ old, new }]`) to the latest version's entry file. Without content: title/description only |
+| `get_artifact`      | Metadata, one version and its files, and the entry text inline                                                                                                       |
+| `list_artifacts`    | Most recently updated first, paged with `cursor`                                                                                                                     |
+| `search_artifacts`  | Full-text search, best match first (see Search)                                                                                                                      |
+| `list_versions`     | All versions of an artifact, newest first                                                                                                                            |
+| `restore_version`   | Publishes a copy of an old version as the new latest (no files are copied, only references)                                                                          |
+| `delete_artifact`   | Moves an artifact to the trash                                                                                                                                       |
+| `undelete_artifact` | Brings it back from the trash                                                                                                                                        |
+
+Each `old` in `edits` must occur exactly once at its step, or nothing is published and the call fails with `edit_failed` (`details: { index, occurrences }`). Edits work on html, markdown and code entries.
+
+Deleted artifacts stay in the trash (`/trash` in the web UI) for 30 days. On startup and then every hour, the server deletes artifacts that have been in the trash longer, and then removes stored files that no version uses any more and that are older than an hour.
+
 ## Local setup
 
 Needs Node 24 and pnpm 10. There's no build step: Node runs the TypeScript in `src/` directly.

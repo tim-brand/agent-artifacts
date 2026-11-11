@@ -130,6 +130,9 @@ const artifacts: ArtifactService = {
   search: () => Promise.reject(new Error('unused')),
   listVersions: () => Promise.reject(new Error('unused')),
   delete: () => Promise.reject(new Error('unused')),
+  undelete: () => Promise.reject(new Error('unused')),
+  listDeleted: () => Promise.reject(new Error('unused')),
+  restoreVersion: () => Promise.reject(new Error('unused')),
   publish: () => Promise.reject(new Error('unused')),
 };
 

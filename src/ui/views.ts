@@ -1,5 +1,13 @@
 import { html, raw } from 'hono/html';
-import type { Artifact, Format, SearchHit, TokenInfo, Version } from '../contracts.ts';
+import {
+  type Artifact,
+  type DeletedArtifact,
+  type Format,
+  type SearchHit,
+  type TokenInfo,
+  TRASH_DAYS,
+  type Version,
+} from '../contracts.ts';
 import { type Html, layout } from './layout.ts';
 
 export const FORMATS: readonly Format[] = ['html', 'markdown', 'code', 'pdf', 'image'];
@@ -189,10 +197,36 @@ ${a.description ? html`<p class="desc">${a.description}</p>` : ''}
 ${switcher}
 <span class="muted">${v.publishedBy} · ${time(v.createdAt)}</span>
 <a href="${entryUrl}" target="_blank" rel="noopener noreferrer">Open in new tab</a>
-<form class="inline" method="post" action="/a/${encodeURIComponent(a.id)}/delete" data-confirm="Delete this artifact?"><button class="danger" type="submit">Delete</button></form>
+${isLatest ? '' : html`<form class="inline" method="post" action="/a/${encodeURIComponent(a.id)}/v/${v.version}/restore"><button type="submit">Restore this version</button></form>`}
+<form class="inline" method="post" action="/a/${encodeURIComponent(a.id)}/delete" data-confirm="Delete this artifact? It stays in the trash for ${TRASH_DAYS} days."><button class="danger" type="submit">Delete</button></form>
 </div>
 ${files}
 <iframe class="artifact" src="${entryUrl}" title="${a.title}"${sandbox}></iframe>`,
+  });
+}
+
+export function trashPage(opts: { user: string; items: DeletedArtifact[] }): Html {
+  const body =
+    opts.items.length === 0
+      ? html`<div class="empty"><p>The trash is empty.</p></div>`
+      : html`<ul class="list">
+${opts.items.map(
+  (a) => html`<li>
+<span class="title">${a.title}</span>
+<span class="badge">${a.format}</span>
+<span class="meta">deleted ${time(a.deletedAt)}</span>
+<form class="inline" method="post" action="/trash/${encodeURIComponent(a.id)}/restore"><button type="submit">Restore</button></form>
+</li>`,
+)}
+</ul>`;
+
+  return layout({
+    title: 'Trash',
+    user: opts.user,
+    nav: 'trash',
+    body: html`<h1>Trash</h1>
+<p class="muted">Deleted artifacts are kept for ${TRASH_DAYS} days, then deleted for good.</p>
+${body}`,
   });
 }
 

@@ -44,6 +44,7 @@ const version: Version = {
 function setup(overrides: Partial<ArtifactService> = {}) {
   const published: { input: PublishInput; publishedBy: string }[] = [];
   const searched: SearchQuery[] = [];
+  const restored: { id: string; version: number; publishedBy: string }[] = [];
   const artifacts: ArtifactService = {
     async publish(input, publishedBy) {
       published.push({ input, publishedBy });
@@ -68,6 +69,17 @@ function setup(overrides: Partial<ArtifactService> = {}) {
     async delete(id) {
       return id === 'art1';
     },
+    async undelete(id) {
+      return id === 'art1';
+    },
+    async listDeleted() {
+      return [];
+    },
+    async restoreVersion(id, n, publishedBy) {
+      restored.push({ id, version: n, publishedBy });
+      if (id !== 'art1') throw new AppError('not_found', 'gone', { id, version: n });
+      return { id, version: 3, title: 'Hello', url: 'https://app.test/a/art1' };
+    },
     ...overrides,
   };
   const deps: Deps = {
@@ -90,7 +102,7 @@ function setup(overrides: Partial<ArtifactService> = {}) {
   };
   const app = new Hono();
   app.route('/mcp', createMcpRoutes(deps));
-  return { app, published, searched };
+  return { app, published, searched, restored };
 }
 
 let nextId = 1;
@@ -166,7 +178,9 @@ test('initialize and tools/list', async () => {
     'list_artifacts',
     'list_versions',
     'publish_artifact',
+    'restore_version',
     'search_artifacts',
+    'undelete_artifact',
   ]);
 });
 
@@ -277,4 +291,47 @@ test('search_artifacts passes the query through and returns hits with url and sn
 
   const missing = await rpc(app, 'tools/call', { name: 'search_artifacts', arguments: {} });
   assert.equal((await missing.json()).result.isError, true);
+});
+
+test('publish_artifact passes edits through, and edit_failed keeps its details', async () => {
+  const { app, published } = setup();
+  const input = { id: 'art1', edits: [{ old: 'Hello', new: 'Bye' }], expectedVersion: 2 };
+  const { result } = await callTool(app, 'publish_artifact', input);
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(published, [{ input, publishedBy: 'claude-laptop' }]);
+
+  // Schema errors come back from the SDK as plain-text tool errors.
+  for (const edits of [[], [{ new: 'x' }], [{ old: '', new: 'x' }]]) {
+    const res = await rpc(app, 'tools/call', {
+      name: 'publish_artifact',
+      arguments: { id: 'art1', edits },
+    });
+    const { result } = await res.json();
+    assert.equal(result.isError, true, JSON.stringify(edits));
+    assert.match(result.content[0].text, /edits/);
+  }
+  assert.equal(published.length, 1);
+
+  const failing = setup({
+    publish: async () => {
+      throw new AppError('edit_failed', 'occurs 2 times', { index: 0, occurrences: 2 });
+    },
+  });
+  const { json } = await callTool(failing.app, 'publish_artifact', input);
+  assert.equal(json.error, 'edit_failed');
+  assert.deepEqual(json.details, { index: 0, occurrences: 2 });
+});
+
+test('restore_version and undelete_artifact', async () => {
+  const { app, restored } = setup();
+  const restore = await callTool(app, 'restore_version', { id: 'art1', version: 1 });
+  assert.equal(restore.json.version, 3);
+  assert.deepEqual(restored, [{ id: 'art1', version: 1, publishedBy: 'claude-laptop' }]);
+  const missing = await callTool(app, 'restore_version', { id: 'nope', version: 1 });
+  assert.equal(missing.json.error, 'not_found');
+
+  const undeleted = await callTool(app, 'undelete_artifact', { id: 'art1' });
+  assert.deepEqual(undeleted.json, { undeleted: true, url: 'https://app.test/a/art1' });
+  const notInTrash = await callTool(app, 'undelete_artifact', { id: 'nope' });
+  assert.equal(notInTrash.json.error, 'not_found');
 });
