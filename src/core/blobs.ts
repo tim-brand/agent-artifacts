@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { access, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sha256Hex } from './ids.ts';
@@ -7,6 +8,8 @@ export type BlobStore = {
   /** Stores the bytes under their SHA-256 (once) and returns the hash. */
   put(bytes: Uint8Array): Promise<string>;
   read(sha256: string): Promise<Uint8Array>;
+  /** For indexing inside a SQLite transaction, which can't await. */
+  readSync(sha256: string): Uint8Array;
 };
 
 export function createBlobStore(dir: string): BlobStore {
@@ -39,6 +42,10 @@ export function createBlobStore(dir: string): BlobStore {
 
     async read(sha256) {
       return new Uint8Array(await readFile(pathOf(sha256)));
+    },
+
+    readSync(sha256) {
+      return new Uint8Array(readFileSync(pathOf(sha256)));
     },
   };
 }

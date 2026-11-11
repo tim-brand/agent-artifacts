@@ -127,6 +127,7 @@ const artifacts: ArtifactService = {
     return file ? { contentType: file[0], bytes: new TextEncoder().encode(file[1]) } : null;
   },
   list: () => Promise.reject(new Error('unused')),
+  search: () => Promise.reject(new Error('unused')),
   listVersions: () => Promise.reject(new Error('unused')),
   delete: () => Promise.reject(new Error('unused')),
   publish: () => Promise.reject(new Error('unused')),

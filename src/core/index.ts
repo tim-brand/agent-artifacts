@@ -13,8 +13,8 @@ export function createCore(config: Config): {
   signer: ContentSigner;
   close(): void;
 } {
-  const db = openDb(config.dataDir);
   const blobs = createBlobStore(join(config.dataDir, 'blobs'));
+  const db = openDb(config.dataDir, blobs);
   return {
     artifacts: createArtifactService(db, blobs, config.appOrigin),
     tokens: createTokenService(db),

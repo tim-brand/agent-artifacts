@@ -14,7 +14,7 @@ const MAX_BODY_BYTES = LIMITS.publishBytes * 2 + MB;
 const INSTRUCTIONS = `agent-artifacts stores and shares artifacts you make: HTML pages, Markdown documents, code, PDFs and images.
 Publish with publish_artifact and give the returned url to the user; they open it in the web app.
 Every publish of an existing id makes a new version; old versions stay readable.
-Use list_artifacts / get_artifact to find and read earlier work before you publish a new version of it.`;
+Use search_artifacts (by text) or list_artifacts (newest first) to find earlier work, and get_artifact to read it before you publish a new version of it.`;
 
 const formatSchema = z.enum(['html', 'markdown', 'code', 'pdf', 'image']);
 
@@ -173,6 +173,31 @@ function createServer(deps: Deps, publishedBy: string): McpServer {
       const page = await artifacts.list(query);
       return {
         items: page.items.map((a) => ({ ...a, url: pageUrl(a.id) })),
+        nextCursor: page.nextCursor,
+      };
+    }),
+  );
+
+  server.registerTool(
+    'search_artifacts',
+    {
+      description:
+        'Search artifacts by text in their title, description and latest version (the entry file; not PDFs), best match first. Give plain words: all of them must match, and the last one also matches as a prefix. Each item has a `snippet` with the matched words between « and ». Pass `nextCursor` as `cursor` for the next page.',
+      inputSchema: {
+        query: z.string().describe('Words to find, e.g. "quarterly report"'),
+        limit: z.number().int().min(1).max(100).optional().describe('Default 20, max 100'),
+        cursor: z.string().optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    tool(async (query) => {
+      const page = await artifacts.search(query);
+      return {
+        items: page.items.map((hit) => ({
+          ...hit.artifact,
+          url: pageUrl(hit.artifact.id),
+          snippet: hit.snippet,
+        })),
         nextCursor: page.nextCursor,
       };
     }),

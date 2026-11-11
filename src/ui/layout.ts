@@ -27,6 +27,9 @@ ul.list{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
 ul.list li{display:flex;gap:.75rem;align-items:baseline;padding:.6rem 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
 ul.list .title{flex:1;min-width:12rem;font-weight:500}
 ul.list .meta{color:var(--muted);font-size:.85rem}
+ul.list .hit{flex-basis:100%;margin:0;color:var(--muted);font-size:.9rem;overflow-wrap:anywhere}
+mark{background:#fde68a;color:#1a1a1a;border-radius:2px}
+form.search{display:flex;gap:.5rem;margin:.5rem 0}form.search input{flex:1;min-width:0}
 .empty{padding:2rem;text-align:center;border:1px dashed var(--line);border-radius:8px}
 .more{margin-top:1rem}
 .bar{display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin:.25rem 0 .75rem}
@@ -40,7 +43,7 @@ details.files{margin:0 0 .75rem}details.files ul{margin:.25rem 0;padding-left:1.
 iframe.artifact{flex:1 1 auto;width:100%;min-height:24rem;border:1px solid var(--line);border-radius:6px;background:#fff}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.45rem .5rem;border-bottom:1px solid var(--line)}th{color:var(--muted);font-weight:500;font-size:.85rem}
 form.inline{display:inline}
-input[type=text]{font:inherit;padding:.35rem .5rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);min-width:16rem}
+input[type=text],input[type=search]{font:inherit;padding:.35rem .5rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);min-width:16rem}
 button{font:inherit;padding:.3rem .8rem;border:1px solid var(--line);border-radius:6px;background:var(--soft);color:var(--fg);cursor:pointer}
 button.danger{color:var(--danger)}
 .notice{padding:.75rem 1rem;border:1px solid var(--line);border-radius:8px;background:var(--soft);margin:1rem 0}

@@ -1,7 +1,15 @@
 import { type Context, Hono } from 'hono';
 import { AppError, type Deps, type Format } from '../contracts.ts';
 import { contentSecurityPolicy } from './layout.ts';
-import { artifactPage, connectPage, FORMATS, listPage, messagePage, tokensPage } from './views.ts';
+import {
+  artifactPage,
+  connectPage,
+  FORMATS,
+  listPage,
+  messagePage,
+  searchPage,
+  tokensPage,
+} from './views.ts';
 
 type Env = { Variables: { user: string } };
 
@@ -59,6 +67,13 @@ export function createUiRoutes(deps: Deps): Hono {
   ui.get('/', async (c) => {
     const format = c.req.query('format');
     const cursor = c.req.query('cursor') || undefined;
+    const query = (c.req.query('q') ?? '').trim().slice(0, 200);
+    if (query) {
+      const page = await artifacts.search({ query, cursor, limit: 20 });
+      return c.html(
+        searchPage({ user: c.get('user'), query, hits: page.items, nextCursor: page.nextCursor }),
+      );
+    }
     const page = await artifacts.list({
       format: isFormat(format) ? format : undefined,
       cursor,
@@ -134,6 +149,9 @@ export function createUiRoutes(deps: Deps): Hono {
 
   ui.onError((err, c) => {
     if (err instanceof AppError && err.code === 'not_found') return notFound(c);
+    if (err instanceof AppError && err.code === 'invalid_input') {
+      return c.html(messagePage(c.get('user') ?? null, 'Bad request', err.message), 400);
+    }
     console.error('ui error', err);
     return c.html(
       messagePage(c.get('user') ?? null, 'Something went wrong', 'The error has been logged.'),
