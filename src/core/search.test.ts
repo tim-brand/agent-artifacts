@@ -60,12 +60,13 @@ test('htmlToText strips tags, scripts, styles and comments, and decodes entities
   assert.equal(htmlToText('&#0; &#x110000; &bogus;'), '&#0; &#x110000; &bogus;');
 });
 
-test('indexText: html as text, others as-is, pdf empty, capped at 256 KB', () => {
+test('indexText: html as text, others as-is, pdf and images empty, capped at 256 KB', () => {
   const bytes = (s: string) => new TextEncoder().encode(s);
   assert.equal(indexText('html', bytes('<p>hi</p>')), 'hi');
   assert.equal(indexText('markdown', bytes('# <b>Title</b>')), '# <b>Title</b>');
   assert.equal(indexText('code', bytes('const a = 1;')), 'const a = 1;');
   assert.equal(indexText('pdf', bytes('%PDF-1.7 text')), '');
+  assert.equal(indexText('image', bytes('\x89PNG binary')), '');
   const long = indexText('markdown', bytes(`${'a'.repeat(256 * 1024 - 1)}é`));
   assert.equal(Buffer.byteLength(long), 256 * 1024 - 1);
   assert.ok(!long.includes('�'));

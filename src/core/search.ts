@@ -66,7 +66,7 @@ function capBytes(text: string, max: number): string {
 
 /** The indexed text of an entry file. PDFs have none: extracting it would need a dependency. */
 export function indexText(format: Format, bytes: Uint8Array): string {
-  if (format === 'pdf') return '';
+  if (format === 'pdf' || format === 'image') return '';
   const text = new TextDecoder().decode(bytes);
   return capBytes(format === 'html' ? htmlToText(text) : text, BODY_BYTES);
 }
