@@ -1,10 +1,12 @@
 import { html, raw } from 'hono/html';
 import {
   type Artifact,
+  COMMENT_LIMITS,
   type DeletedArtifact,
   type Format,
   type SearchHit,
   type ShareLink,
+  type Thread,
   type TokenInfo,
   TRASH_DAYS,
   type Version,
@@ -76,11 +78,22 @@ const searchBox = (query: string) =>
 const versionCount = (a: Artifact) =>
   html`<span class="meta">${a.latestVersion} version${a.latestVersion === 1 ? '' : 's'}</span>`;
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** Open comment threads per artifact id. */
+export type OpenCounts = Record<string, number>;
+
+const openBadge = (n: number | undefined) =>
+  n
+    ? html`<span class="badge" title="Open comment threads">${plural(n, 'open comment')}</span>`
+    : '';
+
 export function listPage(opts: {
   user: string;
   items: Artifact[];
   nextCursor: string | null;
   format: Format | undefined;
+  openComments: OpenCounts;
 }): Html {
   const chipHref = (f: Format | undefined) => (f ? `/?format=${f}` : '/');
   const chips = html`<nav class="chips" aria-label="Filter by format">
@@ -102,7 +115,7 @@ ${opts.items.map(
 <a class="title" href="/a/${encodeURIComponent(a.id)}">${a.title}</a>
 <span class="badge">${a.format}</span>
 ${versionCount(a)}
-<span class="meta">${time(a.updatedAt)}</span>
+<span class="meta">${time(a.updatedAt)}</span>${openBadge(opts.openComments[a.id])}
 </li>`,
 )}
 </ul>
@@ -121,6 +134,7 @@ export function searchPage(opts: {
   query: string;
   hits: SearchHit[];
   nextCursor: string | null;
+  openComments: OpenCounts;
 }): Html {
   const moreHref = opts.nextCursor
     ? `/?${new URLSearchParams({ q: opts.query, cursor: opts.nextCursor })}`
@@ -135,7 +149,7 @@ ${opts.hits.map(
 <a class="title" href="/a/${encodeURIComponent(a.id)}">${a.title}</a>
 <span class="badge">${a.format}</span>
 ${versionCount(a)}
-<span class="meta">${time(a.updatedAt)}</span>
+<span class="meta">${time(a.updatedAt)}</span>${openBadge(opts.openComments[a.id])}
 ${snippet ? html`<p class="hit">${highlight(snippet)}</p>` : ''}
 </li>`,
 )}
@@ -157,6 +171,7 @@ export function artifactPage(opts: {
   artifact: Artifact;
   version: Version;
   versions: Version[];
+  threads: Thread[];
   url: (path: string) => string;
   shareLinks: ShareLink[];
   createdLink?: { url: string; link: ShareLink };
@@ -205,7 +220,13 @@ ${isLatest ? '' : html`<form class="inline" method="post" action="/a/${encodeURI
 </div>
 ${files}
 ${shareSection(a, v, opts.shareLinks, opts.createdLink)}
-<iframe class="artifact" src="${entryUrl}" title="${a.title}"${sandbox}></iframe>`,
+<div class="viewer">
+<div class="frame">
+<iframe class="artifact" src="${entryUrl}" title="${a.title}"${sandbox}></iframe>
+<button type="button" id="comment-on-selection" hidden>Comment on selection</button>
+</div>
+${commentsPanel(a, v, opts.threads)}
+</div>`,
   });
 }
 
@@ -297,6 +318,60 @@ ${EXPIRY_CHOICES.map(([value, label]) => html`<option value="${value}">${label}<
 <button type="submit">Create public link</button>
 </form>
 ${rows}
+</details>`;
+}
+
+/**
+ * Threads started on this version or an earlier one, open ones first. Every form is a plain POST to
+ * the app origin. Only open text threads carry data-exact: app.js asks the frame to highlight those.
+ */
+function commentsPanel(a: Artifact, v: Version, threads: Thread[]): Html {
+  const shown = threads.filter((t) => t.version <= v.version);
+  const open = shown.filter((t) => !t.resolvedAt);
+  const resolved = shown.filter((t) => t.resolvedAt);
+  const action = `/a/${encodeURIComponent(a.id)}/comments`;
+  const version = html`<input type="hidden" name="version" value="${v.version}">`;
+  const textarea = (placeholder: string, rows: number) =>
+    html`<textarea name="body" rows="${rows}" required maxlength="${COMMENT_LIMITS.body}" placeholder="${placeholder}" aria-label="${placeholder}"></textarea>`;
+
+  const thread = (t: Thread) => {
+    const quote = t.anchor.kind === 'text' ? t.anchor : null;
+    const highlight =
+      quote && !t.resolvedAt
+        ? html` data-exact="${quote.exact}" data-prefix="${quote.prefix}" data-suffix="${quote.suffix}"`
+        : '';
+    return html`<article class="thread${t.resolvedAt ? ' done' : ''}" id="thread-${t.id}"${highlight}>
+${quote ? html`<blockquote class="quote">${quote.exact}</blockquote>` : ''}
+${t.version !== v.version ? html`<span class="badge" title="Started on version ${t.version}">on v${t.version}</span>` : ''}
+<ol>
+${t.comments.map(
+  (
+    c,
+  ) => html`<li><div class="who">${c.author}${c.typed ? '' : html` <span class="badge">agent</span>`} · ${time(c.createdAt)}</div>
+<div class="text">${c.body}</div></li>`,
+)}
+</ol>
+<form method="post" action="${action}">
+<input type="hidden" name="threadId" value="${t.id}">${version}
+${textarea('Reply', 1)}
+<div class="row"><button type="submit">Reply</button>
+<button type="submit" formaction="${action}/${encodeURIComponent(t.id)}/resolve" formnovalidate name="resolved" value="${t.resolvedAt ? '0' : '1'}">${t.resolvedAt ? 'Reopen' : 'Resolve'}</button></div>
+</form>
+</article>`;
+  };
+
+  return html`<details class="comments" id="comments" open>
+<summary>Comments${open.length ? html` <span class="badge">${open.length} open</span>` : ''}</summary>
+<form method="post" action="${action}" id="new-comment">
+${version}
+<input type="hidden" name="exact"><input type="hidden" name="prefix"><input type="hidden" name="suffix">
+<div id="new-quote" hidden><blockquote class="quote" id="new-quote-text"></blockquote>
+<button type="button" id="new-quote-clear">Remove quote</button></div>
+${textarea(`Comment on version ${v.version}`, 3)}
+<div class="row"><button type="submit">Comment</button></div>
+</form>
+${open.length === 0 ? html`<p class="muted">No open comments.</p>` : open.map(thread)}
+${resolved.length ? html`<details class="resolved"><summary>${plural(resolved.length, 'resolved thread')}</summary>${resolved.map(thread)}</details>` : ''}
 </details>`;
 }
 
