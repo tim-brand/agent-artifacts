@@ -1,7 +1,7 @@
 // The seams between the parts of the app. core/ implements these; mcp/, ui/ and content/ only
 // use them, so each part can be built and tested on its own (with a fake where needed).
 
-export type Format = 'html' | 'markdown' | 'code' | 'pdf';
+export type Format = 'html' | 'markdown' | 'code' | 'pdf' | 'image';
 
 /** One file to publish: UTF-8 text, or binary as base64. */
 export type FileInput = string | { base64: string };
@@ -40,13 +40,17 @@ export type PublishInput = {
   /** Required for a new artifact. On an existing one, changes the title. */
   title?: string;
   description?: string;
-  /** One file: `content` with `format`. The entry is then index.html, README.md, main.<ext> or document.pdf. */
+  /**
+   * One file: `content` with `format`. The entry is then index.html, README.md, main.<ext> or
+   * document.pdf. An image is base64 (an SVG may also be its text) and is named by `entry`, or by
+   * `language` set to its extension (image.<ext>).
+   */
   content?: string;
   format?: Format;
   /** Or several files, with `entry` naming the one to open. */
   files?: Record<string, FileInput>;
   entry?: string;
-  /** For code: the language, used for the file extension and highlighting (e.g. "ts", "python"). */
+  /** For code: the language, used for the file extension and highlighting (e.g. "ts", "python"). For an image: its extension. */
   language?: string;
   /** Refuse with version_conflict when the latest version is no longer this one. */
   expectedVersion?: number;

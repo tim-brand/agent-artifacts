@@ -4,7 +4,9 @@ import { AppError, type FileInput, type Format, LIMITS, type PublishInput } from
 export type PreparedFile = { path: string; bytes: Uint8Array; contentType: string };
 export type PreparedVersion = { entry: string; format: Format; files: PreparedFile[] };
 
-const FORMATS: readonly Format[] = ['html', 'markdown', 'code', 'pdf'];
+const FORMATS: readonly Format[] = ['html', 'markdown', 'code', 'pdf', 'image'];
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']);
 
 const CONTENT_TYPES: Record<string, string> = {
   html: 'text/html; charset=utf-8',
@@ -84,6 +86,7 @@ function inferFormat(path: string, bytes: Uint8Array): Format {
   if (ext === 'html' || ext === 'htm') return 'html';
   if (ext === 'md' || ext === 'markdown') return 'markdown';
   if (ext === 'pdf') return 'pdf';
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
   if (CODE_EXTENSIONS.has(ext) || isUtf8(bytes)) return 'code';
   throw new AppError('unsupported_format', `Can't show an entry file like ${path}`);
 }
@@ -132,6 +135,50 @@ function isPdf(bytes: Uint8Array): boolean {
   return Buffer.from(bytes.subarray(0, 4)).toString('latin1') === '%PDF';
 }
 
+/** Null when the bytes match the image extension, else what the file should look like. */
+function imageMismatch(ext: string, bytes: Uint8Array): string | null {
+  const head = Buffer.from(bytes.subarray(0, 12)).toString('latin1');
+  switch (ext) {
+    case 'png':
+      return head.startsWith('\x89PNG') ? null : 'a PNG (it should start with 89 50 4E 47)';
+    case 'jpg':
+    case 'jpeg':
+      return head.startsWith('\xff\xd8\xff') ? null : 'a JPEG (it should start with FF D8 FF)';
+    case 'gif':
+      return head.startsWith('GIF8') ? null : 'a GIF (it should start with GIF8)';
+    case 'webp':
+      return head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP'
+        ? null
+        : 'a WebP (it should start with RIFF....WEBP)';
+    case 'svg':
+      return isUtf8(bytes) && Buffer.from(bytes).toString('utf8').includes('<svg')
+        ? null
+        : 'an SVG (UTF-8 text containing <svg)';
+    default:
+      return `an image (use ${[...IMAGE_EXTENSIONS].join(', ')})`;
+  }
+}
+
+/** The entry of a single-file image publish: `entry` if given, else image.<language>. */
+function imageEntry(input: PublishInput): string {
+  const entry =
+    input.entry ?? (input.language ? `image.${input.language.trim().toLowerCase()}` : '');
+  if (!entry) {
+    throw new AppError(
+      'invalid_input',
+      'An image needs entry (e.g. chart.png) or language (e.g. png)',
+    );
+  }
+  validatePath(entry);
+  if (!IMAGE_EXTENSIONS.has(extensionOf(entry))) {
+    throw new AppError(
+      'invalid_input',
+      `${entry} is not an image name: use ${[...IMAGE_EXTENSIONS].join(', ')}`,
+    );
+  }
+  return entry;
+}
+
 export function hasContent(input: PublishInput): boolean {
   return input.content !== undefined || input.files !== undefined;
 }
@@ -155,16 +202,21 @@ export function prepareVersion(input: PublishInput): PreparedVersion {
     }
     if (!input.format) throw new AppError('invalid_input', 'format is required with content');
     format = input.format;
-    entry = {
-      html: 'index.html',
-      markdown: 'README.md',
-      pdf: 'document.pdf',
-      code: `main.${codeExtension(input.language)}`,
-    }[format];
-    const bytes =
-      format === 'pdf'
-        ? decodeBase64(input.content, entry)
-        : new TextEncoder().encode(input.content);
+    entry =
+      format === 'image'
+        ? imageEntry(input)
+        : {
+            html: 'index.html',
+            markdown: 'README.md',
+            pdf: 'document.pdf',
+            code: `main.${codeExtension(input.language)}`,
+          }[format];
+    // SVG may come as its text too: base64 never contains '<'.
+    const binary =
+      format === 'pdf' || (format === 'image' && !input.content.trimStart().startsWith('<'));
+    const bytes = binary
+      ? decodeBase64(input.content, entry)
+      : new TextEncoder().encode(input.content);
     raw = [[entry, bytes]];
   } else {
     const files = input.files;
@@ -213,6 +265,11 @@ export function prepareVersion(input: PublishInput): PreparedVersion {
   }));
   if (format === 'pdf' && !isPdf(files.find((f) => f.path === entry)?.bytes ?? new Uint8Array())) {
     throw new AppError('invalid_input', `${entry} is not a PDF (it should start with %PDF)`);
+  }
+  if (format === 'image') {
+    if (files.length > 1) throw new AppError('invalid_input', 'An image artifact has one file');
+    const mismatch = imageMismatch(extensionOf(entry), files[0]?.bytes ?? new Uint8Array());
+    if (mismatch) throw new AppError('invalid_input', `${entry} is not ${mismatch}`);
   }
   return { entry, format, files };
 }

@@ -11,24 +11,25 @@ const INLINE_BYTES = MB;
 /** Room for a full publish as base64 (4/3) or escaped JSON text (up to ~2x). */
 const MAX_BODY_BYTES = LIMITS.publishBytes * 2 + MB;
 
-const INSTRUCTIONS = `agent-artifacts stores and shares artifacts you make: HTML pages, Markdown documents, code and PDFs.
+const INSTRUCTIONS = `agent-artifacts stores and shares artifacts you make: HTML pages, Markdown documents, code, PDFs and images.
 Publish with publish_artifact and give the returned url to the user; they open it in the web app.
 Every publish of an existing id makes a new version; old versions stay readable.
 Use list_artifacts / get_artifact to find and read earlier work before you publish a new version of it.`;
 
-const formatSchema = z.enum(['html', 'markdown', 'code', 'pdf']);
+const formatSchema = z.enum(['html', 'markdown', 'code', 'pdf', 'image']);
 
 const PUBLISH_DESCRIPTION = `Publish an artifact, or a new version of one. Returns {id, version, title, url}; share the url with the user.
 
 Content, choose one:
-- One file: \`content\` + \`format\` (html, markdown, code or pdf). For pdf, \`content\` is base64. For code, set \`language\` (e.g. "ts", "python"). The file is stored as index.html, README.md, main.<ext> or document.pdf.
+- One file: \`content\` + \`format\` (html, markdown, code, pdf or image). For pdf, \`content\` is base64. For code, set \`language\` (e.g. "ts", "python"). The file is stored as index.html, README.md, main.<ext> or document.pdf.
+- An image (png, jpg, gif, webp or svg; a diagram, chart or screenshot): \`content\` is base64 (an SVG may also be its text), with \`format\` "image" and either \`entry\` as the file name (e.g. "chart.png") or \`language\` as the extension (e.g. "png"). The bytes must match the extension. An image artifact has one file; for a page with several images, publish html with files.
 - Several files: \`files\` maps a relative path to its text, or to {"base64": "..."} for binary files (images, fonts, pdf); \`entry\` names the file to open (e.g. "index.html"), and \`format\` says what it is. Relative links between files in an HTML artifact work.
 
 New artifact: omit \`id\`; \`title\` is required.
 New version: pass the artifact's \`id\` with new content/files. Pass \`expectedVersion\` (the version you last saw) to fail with version_conflict instead of overwriting someone else's newer version.
 Settings only: pass \`id\` with only \`title\` and/or \`description\` (no content or files) to change them without making a version.
 
-Limits: ${LIMITS.publishBytes / MB} MB decoded per publish, ${LIMITS.fileBytes / MB} MB per file, ${LIMITS.files} files.`;
+Limits: ${LIMITS.publishBytes / MB} MB decoded per publish, ${LIMITS.fileBytes / MB} MB per file, ${LIMITS.files} files. Base64 is a third larger than the bytes and all of it goes inline in this call, so a big image (several MB) makes a very large request: prefer a compact PNG, JPEG or WebP, or an SVG.`;
 
 const fileInputSchema = z.union([
   z.string(),
@@ -42,14 +43,27 @@ const publishSchema = {
     .describe('Existing artifact id, for a new version or a settings change'),
   title: z.string().optional().describe('Required for a new artifact'),
   description: z.string().optional().describe('Short summary shown in lists'),
-  content: z.string().optional().describe('Single-file content; base64 when format is pdf'),
+  content: z
+    .string()
+    .optional()
+    .describe('Single-file content; base64 when format is pdf or image (an SVG may be its text)'),
   format: formatSchema.optional(),
   files: z
     .record(z.string(), fileInputSchema)
     .optional()
     .describe('Relative path -> text, or {"base64": "..."} for binary'),
-  entry: z.string().optional().describe('With files: the path of the file to open'),
-  language: z.string().optional().describe('For code: the language, e.g. "ts", "python"'),
+  entry: z
+    .string()
+    .optional()
+    .describe(
+      'With files: the path of the file to open. For an image: its file name, e.g. "chart.png"',
+    ),
+  language: z
+    .string()
+    .optional()
+    .describe(
+      'For code: the language, e.g. "ts", "python". For an image: its extension, e.g. "png"',
+    ),
   expectedVersion: z
     .number()
     .int()
@@ -112,7 +126,7 @@ function createServer(deps: Deps, publishedBy: string): McpServer {
     'get_artifact',
     {
       description:
-        'Get an artifact: its metadata, one version with its file list, and the entry file text inline (for text formats up to 1 MB). Latest version when `version` is omitted. `url` is the page for this version in the web app.',
+        'Get an artifact: its metadata, one version with its file list, and the entry file text inline (for text formats and SVG, up to 1 MB). Latest version when `version` is omitted. `url` is the page for this version in the web app.',
       inputSchema: {
         id: z.string(),
         version: z.number().int().positive().optional().describe('Defaults to the latest'),
@@ -131,6 +145,8 @@ function createServer(deps: Deps, publishedBy: string): McpServer {
       };
       if (v.format === 'pdf') {
         result.entryContentOmitted = 'The entry file is a PDF; open the url to view it.';
+      } else if (v.format === 'image' && !entry?.contentType.startsWith('image/svg+xml')) {
+        result.entryContentOmitted = 'The entry file is an image; open the url to view it.';
       } else if (!entry || entry.size > INLINE_BYTES) {
         result.entryContentOmitted = `The entry file is larger than 1 MB; open the url to view it.`;
       } else {

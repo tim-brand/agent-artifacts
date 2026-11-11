@@ -2,7 +2,7 @@ import { html, raw } from 'hono/html';
 import type { Artifact, Format, TokenInfo, Version } from '../contracts.ts';
 import { type Html, layout } from './layout.ts';
 
-export const FORMATS: readonly Format[] = ['html', 'markdown', 'code', 'pdf'];
+export const FORMATS: readonly Format[] = ['html', 'markdown', 'code', 'pdf', 'image'];
 
 const SANDBOX =
   'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-downloads allow-modals';

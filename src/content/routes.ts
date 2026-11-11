@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Deps } from '../contracts.ts';
-import { renderCode, renderMarkdown } from './render.ts';
+import { renderCode, renderImage, renderMarkdown } from './render.ts';
 
 /**
  * The content host: serves untrusted, agent-written files under signed, short-lived URLs
@@ -49,7 +49,9 @@ export function createContentRoutes(deps: Deps): Hono {
 
     const { format, entry, files } = found.version;
     const render =
-      path === entry && (format === 'markdown' || format === 'code') && c.req.query('raw') !== '1';
+      path === entry &&
+      (format === 'markdown' || format === 'code' || format === 'image') &&
+      c.req.query('raw') !== '1';
     const sha256 = files.find((f) => f.path === path)?.sha256;
     const contentType = render ? HTML : file.contentType;
     const headers: Record<string, string> = {
@@ -63,8 +65,9 @@ export function createContentRoutes(deps: Deps): Hono {
     }
 
     if (!render) return new Response(file.bytes as Uint8Array<ArrayBuffer>, { headers });
-    const source = new TextDecoder().decode(file.bytes);
     const { title } = found.artifact;
+    if (format === 'image') return new Response(renderImage(title, path), { headers });
+    const source = new TextDecoder().decode(file.bytes);
     const body =
       format === 'markdown' ? renderMarkdown(title, source) : renderCode(title, path, source);
     return new Response(body, { headers });

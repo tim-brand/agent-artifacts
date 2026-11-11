@@ -47,7 +47,18 @@ export function renderCode(title: string, path: string, source: string): string 
   );
 }
 
-function page(title: string, body: string): string {
+/** The image itself (`?raw=1`, relative to this page) centered and scaled to fit. */
+export function renderImage(title: string, path: string): string {
+  const name = path.split('/').pop() ?? path;
+  const src = `${encodeURIComponent(name)}?raw=1`;
+  return page(
+    title,
+    `<img class="image" src="${escapeHtml(src)}" alt="${escapeHtml(title)}">`,
+    'image',
+  );
+}
+
+function page(title: string, body: string, bodyClass?: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -57,7 +68,7 @@ function page(title: string, body: string): string {
 <title>${escapeHtml(title)}</title>
 <style>${CSS}</style>
 </head>
-<body>
+<body${bodyClass ? ` class="${bodyClass}"` : ''}>
 ${body}
 </body>
 </html>
@@ -113,4 +124,9 @@ pre { background: var(--code-bg); padding: 1rem; border-radius: 6px; overflow-x:
 .hljs-deletion { color: var(--kw); }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 600; }
+body.image {
+  max-width: none; min-height: 100vh; margin: 0; padding: 1rem; display: flex;
+  align-items: center; justify-content: center; background: var(--code-bg);
+}
+.image { display: block; max-width: 100%; max-height: calc(100vh - 2rem); object-fit: contain; }
 `;
