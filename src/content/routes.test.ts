@@ -148,6 +148,7 @@ const deps = {
   artifacts,
   signer,
   tokens: {} as Deps['tokens'],
+  shareLinks: {} as Deps['shareLinks'],
 } satisfies Deps;
 
 const app = createContentRoutes(deps);

@@ -141,6 +141,47 @@ export interface TokenService {
   verify(token: string): Promise<TokenInfo | null>;
 }
 
+export type ShareLink = {
+  id: string;
+  artifactId: string;
+  /** The pinned version, or null when the link always shows the latest. */
+  version: number | null;
+  label: string;
+  createdAt: string;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+};
+
+export type ShareLinkInput = {
+  /** Pin the link to this version; omit to always show the latest. */
+  version?: number;
+  label?: string;
+  /** ISO 8601, in the future. Omit for a link that never expires. */
+  expiresAt?: string;
+};
+
+/**
+ * Public links on the content host that need no sign-in:
+ *   `${CONTENT_ORIGIN}/p/<token>/<path>`
+ * Making something public is the owner's decision, so only the web UI may create or revoke them;
+ * MCP gets `list` only.
+ */
+export interface ShareLinkService {
+  /** The plain token is only ever returned here; only its SHA-256 is stored. Format: `sl_<base64url>`. */
+  create(artifactId: string, input?: ShareLinkInput): Promise<{ token: string; link: ShareLink }>;
+  /**
+   * Links that aren't revoked, expired ones included, newest first: of one artifact (null when it
+   * doesn't exist or is deleted), or of every live artifact when `artifactId` is omitted.
+   */
+  list(artifactId?: string): Promise<ShareLink[] | null>;
+  revoke(artifactId: string, id: string): Promise<boolean>;
+  /**
+   * The version a token shows right now. Null when the token is unknown, revoked or expired, or its
+   * artifact is deleted. Constant-time; updates lastUsedAt.
+   */
+  resolve(token: string): Promise<{ link: ShareLink; version: number } | null>;
+}
+
 /**
  * Short-lived URLs on the content host. The signature sits in the path, not the query, so relative
  * links inside a multi-file HTML artifact keep working:
@@ -187,5 +228,6 @@ export type Deps = {
   config: import('./config.ts').Config;
   artifacts: ArtifactService;
   tokens: TokenService;
+  shareLinks: ShareLinkService;
   signer: ContentSigner;
 };

@@ -217,7 +217,7 @@ test('the migration backfills existing artifacts', async (t) => {
   // Roll the database back to before the search migration, as on the deployed instance.
   env.reopen(() => {
     const db = new DatabaseSync(join(env.config.dataDir, 'artifacts.db'));
-    db.exec('DROP TABLE artifacts_fts; PRAGMA user_version = 1');
+    db.exec('DROP TABLE artifacts_fts; DROP TABLE share_links; PRAGMA user_version = 1');
     db.close();
   });
 

@@ -1,5 +1,5 @@
 import { type Context, Hono } from 'hono';
-import { AppError, type Deps, type Format } from '../contracts.ts';
+import { AppError, type Deps, type Format, type ShareLink } from '../contracts.ts';
 import { contentSecurityPolicy } from './layout.ts';
 import {
   artifactPage,
@@ -16,6 +16,9 @@ type Env = { Variables: { user: string } };
 
 const isFormat = (value: string | undefined): value is Format => FORMATS.includes(value as Format);
 
+/** The expiry choices of a new share link, in days; '' never expires. */
+const EXPIRY_DAYS = ['', '1', '7', '30', '90'];
+
 /** Positive integer from a path segment, else null. */
 function versionParam(value: string): number | null {
   return /^[1-9]\d{0,8}$/.test(value) ? Number(value) : null;
@@ -26,7 +29,7 @@ function versionParam(value: string): number | null {
  * from X-authentik-email (or DEV_USER locally). Every POST must come from the app origin.
  */
 export function createUiRoutes(deps: Deps): Hono {
-  const { config, artifacts, tokens, signer } = deps;
+  const { config, artifacts, tokens, shareLinks, signer } = deps;
   const csp = contentSecurityPolicy(config.contentOrigin);
   const ui = new Hono<Env>();
 
@@ -90,10 +93,16 @@ export function createUiRoutes(deps: Deps): Hono {
     );
   });
 
-  const showArtifact = async (c: Context<Env>, id: string, versionNumber?: number) => {
+  const showArtifact = async (
+    c: Context<Env>,
+    id: string,
+    versionNumber?: number,
+    created?: { url: string; link: ShareLink },
+  ) => {
     const found = await artifacts.get(id, versionNumber);
     const versions = found ? await artifacts.listVersions(id) : null;
-    if (!found || !versions) return notFound(c);
+    const links = found ? await shareLinks.list(id) : null;
+    if (!found || !versions || !links) return notFound(c);
     const { artifact, version } = found;
     return c.html(
       artifactPage({
@@ -102,6 +111,8 @@ export function createUiRoutes(deps: Deps): Hono {
         version,
         versions,
         url: (path) => signer.url(artifact.id, version.version, path),
+        shareLinks: links,
+        createdLink: created,
       }),
     );
   };
@@ -131,6 +142,31 @@ export function createUiRoutes(deps: Deps): Hono {
   ui.post('/trash/:id/restore', async (c) => {
     if (!(await artifacts.undelete(c.req.param('id')))) return notFound(c);
     return c.redirect('/trash', 303);
+  });
+
+  ui.post('/a/:id/share', async (c) => {
+    const id = c.req.param('id');
+    const body = await c.req.parseBody();
+    const pin = body.version === 'latest' ? undefined : versionParam(String(body.version ?? ''));
+    const days = typeof body.expires === 'string' ? body.expires : '';
+    if (pin === null || !EXPIRY_DAYS.includes(days)) {
+      throw new AppError('invalid_input', 'Choose a version and an expiry from the form.');
+    }
+    const created = await shareLinks.create(id, {
+      version: pin,
+      label: typeof body.label === 'string' ? body.label : '',
+      expiresAt: days ? new Date(Date.now() + Number(days) * 86_400_000).toISOString() : undefined,
+    });
+    // The URL holds the token, which is shown only on this page.
+    c.header('Cache-Control', 'no-store');
+    const url = `${config.contentOrigin}/p/${created.token}/`;
+    return showArtifact(c, id, pin, { url, link: created.link });
+  });
+
+  ui.post('/a/:id/share/:link/revoke', async (c) => {
+    const id = c.req.param('id');
+    if (!(await shareLinks.revoke(id, c.req.param('link')))) return notFound(c);
+    return c.redirect(`/a/${encodeURIComponent(id)}`, 303);
   });
 
   ui.get('/settings/tokens', async (c) =>

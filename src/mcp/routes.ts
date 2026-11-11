@@ -3,7 +3,16 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { AppError, type Deps, LIMITS } from '../contracts.ts';
+import {
+  AppError,
+  type Deps,
+  LIMITS,
+  type ShareLink,
+  type ShareLinkService,
+} from '../contracts.ts';
+
+/** Read only: no MCP path can create or revoke a public link. */
+type McpDeps = Omit<Deps, 'shareLinks'> & { shareLinks: Pick<ShareLinkService, 'list'> };
 
 const MB = 1024 * 1024;
 /** Inline the entry file in get_artifact up to this size. */
@@ -15,7 +24,8 @@ const INSTRUCTIONS = `agent-artifacts stores and shares artifacts you make: HTML
 Publish with publish_artifact and give the returned url to the user; they open it in the web app.
 Every publish of an existing id makes a new version; old versions stay readable, and restore_version brings one back.
 For small changes, publish_artifact with \`edits\` instead of resending the whole file.
-Use search_artifacts (by text) or list_artifacts (newest first) to find earlier work, and get_artifact to read it before you publish a new version of it.`;
+Use search_artifacts (by text) or list_artifacts (newest first) to find earlier work, and get_artifact to read it before you publish a new version of it.
+Only the user can make an artifact public, in the web app; list_share_links shows which public links exist.`;
 
 const formatSchema = z.enum(['html', 'markdown', 'code', 'pdf', 'image']);
 
@@ -116,8 +126,8 @@ function notFound(id: string, version?: number): AppError {
   return new AppError('not_found', `${what} not found`, { id, version });
 }
 
-function createServer(deps: Deps, publishedBy: string): McpServer {
-  const { artifacts, config } = deps;
+function createServer(deps: McpDeps, publishedBy: string): McpServer {
+  const { artifacts, shareLinks, config } = deps;
   const pageUrl = (id: string, version?: number) =>
     version === undefined
       ? `${config.appOrigin}/a/${id}`
@@ -272,6 +282,23 @@ function createServer(deps: Deps, publishedBy: string): McpServer {
     tool(async ({ id, version }) => artifacts.restoreVersion(id, version, publishedBy)),
   );
 
+  server.registerTool(
+    'list_share_links',
+    {
+      description:
+        'List the public share links of an artifact, or of every artifact when `id` is omitted, newest first. Anyone with such a link can open the artifact without signing in: `version` null means it shows the latest version, otherwise that version only; `active` is false once it has expired. Only the user can create or revoke links, in the web app, and their URLs are shown only there, once.',
+      inputSchema: { id: z.string().optional() },
+      annotations: { readOnlyHint: true },
+    },
+    tool(async ({ id }) => {
+      const links = await shareLinks.list(id);
+      if (!links) throw notFound(id ?? '');
+      const time = Date.now();
+      const active = (l: ShareLink) => !l.expiresAt || Date.parse(l.expiresAt) > time;
+      return { links: links.map((l) => ({ ...l, active: active(l) })) };
+    }),
+  );
+
   return server;
 }
 
@@ -285,7 +312,7 @@ function bearer(header: string | undefined): string | null {
  * The ingress puts no forward auth in front of /mcp, so only the bearer token counts here;
  * X-authentik-* headers are never read.
  */
-export function createMcpRoutes(deps: Deps): Hono {
+export function createMcpRoutes(deps: McpDeps): Hono {
   const app = new Hono();
 
   app.all('/', async (c) => {

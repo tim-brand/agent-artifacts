@@ -83,6 +83,22 @@ const MIGRATIONS: Migration[] = [
       insert.run(row.id, row.title, row.description, entryBody(blobs, row.format, row.sha256));
     }
   },
+
+  // Public share links. A NULL version follows the latest one. Purging an artifact removes its links.
+  `
+  CREATE TABLE share_links (
+    id TEXT PRIMARY KEY,
+    artifact_id TEXT NOT NULL REFERENCES artifacts (id) ON DELETE CASCADE,
+    version INTEGER,
+    token_hash TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    revoked_at TEXT,
+    last_used_at TEXT
+  );
+  CREATE INDEX share_links_by_artifact ON share_links (artifact_id, created_at DESC);
+  `,
 ];
 
 export function openDb(dataDir: string, blobs: BlobStore): DatabaseSync {

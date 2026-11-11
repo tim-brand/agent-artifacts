@@ -4,6 +4,7 @@ import {
   type DeletedArtifact,
   type Format,
   type SearchHit,
+  type ShareLink,
   type TokenInfo,
   TRASH_DAYS,
   type Version,
@@ -157,6 +158,8 @@ export function artifactPage(opts: {
   version: Version;
   versions: Version[];
   url: (path: string) => string;
+  shareLinks: ShareLink[];
+  createdLink?: { url: string; link: ShareLink };
 }): Html {
   const { artifact: a, version: v } = opts;
   const entryUrl = opts.url(v.entry);
@@ -201,6 +204,7 @@ ${isLatest ? '' : html`<form class="inline" method="post" action="/a/${encodeURI
 <form class="inline" method="post" action="/a/${encodeURIComponent(a.id)}/delete" data-confirm="Delete this artifact? It stays in the trash for ${TRASH_DAYS} days."><button class="danger" type="submit">Delete</button></form>
 </div>
 ${files}
+${shareSection(a, v, opts.shareLinks, opts.createdLink)}
 <iframe class="artifact" src="${entryUrl}" title="${a.title}"${sandbox}></iframe>`,
   });
 }
@@ -228,6 +232,72 @@ ${opts.items.map(
 <p class="muted">Deleted artifacts are kept for ${TRASH_DAYS} days, then deleted for good.</p>
 ${body}`,
   });
+}
+
+const EXPIRY_CHOICES: [string, string][] = [
+  ['', 'Never expires'],
+  ['1', 'Expires in 1 day'],
+  ['7', 'Expires in 7 days'],
+  ['30', 'Expires in 30 days'],
+  ['90', 'Expires in 90 days'],
+];
+
+function shareSection(
+  a: Artifact,
+  v: Version,
+  links: ShareLink[],
+  created?: { url: string; link: ShareLink },
+): Html {
+  const base = `/a/${encodeURIComponent(a.id)}`;
+  const notice = created
+    ? html`<div class="notice warn">
+<p><strong>Public link created.</strong> Copy it now: it is shown only once and cannot be retrieved later.</p>
+<div class="snippet"><pre><code id="share-url" class="token">${created.url}</code></pre>${copyButton('share-url')}</div>
+</div>`
+    : '';
+
+  const expires = (l: ShareLink) => {
+    if (!l.expiresAt) return html`<span class="muted">never</span>`;
+    if (Date.parse(l.expiresAt) <= Date.now()) return html`<span class="badge">expired</span>`;
+    return html`<time datetime="${l.expiresAt}" title="${l.expiresAt}">${l.expiresAt.slice(0, 16).replace('T', ' ')} UTC</time>`;
+  };
+
+  const rows =
+    links.length === 0
+      ? html`<p class="muted">No public links.</p>`
+      : html`<table>
+<thead><tr><th>Label</th><th>Shows</th><th>Created</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
+<tbody>
+${links.map(
+  (l) => html`<tr>
+<td>${l.label || html`<span class="muted">no label</span>`}</td>
+<td>${l.version === null ? 'Latest version' : html`<a href="${base}/v/${l.version}">Version ${l.version}</a>`}</td>
+<td>${time(l.createdAt)}</td>
+<td>${expires(l)}</td>
+<td>${l.lastUsedAt ? time(l.lastUsedAt) : html`<span class="muted">never</span>`}</td>
+<td><form class="inline" method="post" action="${base}/share/${encodeURIComponent(l.id)}/revoke" data-confirm="Revoke this link? Anyone using it loses access."><button class="danger" type="submit">Revoke</button></form></td>
+</tr>`,
+)}
+</tbody>
+</table>`;
+
+  return html`<details class="share"${created ? raw(' open') : ''}>
+<summary>Share${links.length ? ` · ${links.length} public link${links.length === 1 ? '' : 's'}` : ''}</summary>
+${notice}
+<p class="muted">Anyone with a public link can open this artifact without signing in, until you revoke it.</p>
+<form method="post" action="${base}/share" class="bar">
+<select name="version" aria-label="Version to show">
+<option value="latest">Always the latest version</option>
+<option value="${v.version}">Only version ${v.version}</option>
+</select>
+<input type="text" name="label" placeholder="Label, e.g. family" maxlength="100" aria-label="Label">
+<select name="expires" aria-label="Expiry">
+${EXPIRY_CHOICES.map(([value, label]) => html`<option value="${value}">${label}</option>`)}
+</select>
+<button type="submit">Create public link</button>
+</form>
+${rows}
+</details>`;
 }
 
 export function tokensPage(opts: {

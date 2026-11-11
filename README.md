@@ -7,7 +7,7 @@ An image artifact is one PNG, JPEG, GIF, WebP or SVG file. Its bytes must match 
 One process serves two hosts, picked by the `Host` header:
 
 - **App host** (`APP_ORIGIN`): the web UI, behind Authentik forward auth, which trusts the `X-authentik-email` header. Forward auth is skipped on `/mcp`, the MCP endpoint (streamable HTTP), where agents authenticate with personal access tokens (`Authorization: Bearer aa_...`), and on `/healthz`.
-- **Content host** (`CONTENT_ORIGIN`): serves the artifact files from signed URLs, with no forward auth and no cookies. An artifact's HTML and scripts run on a different origin than the app, so they can't reach the app's session or API. The entry of a Markdown, code or image artifact is shown as a page; add `?raw=1` for the file itself.
+- **Content host** (`CONTENT_ORIGIN`): serves the artifact files from signed URLs and public share links, with no forward auth and no cookies. An artifact's HTML and scripts run on a different origin than the app, so they can't reach the app's session or API. The entry of a Markdown, code or image artifact is shown as a page; add `?raw=1` for the file itself.
 
 Artifacts are stored in a SQLite database and in files under `DATA_DIR`.
 
@@ -29,10 +29,19 @@ A query is plain words: every word must match, the last also as a prefix, and ac
 | `restore_version`   | Publishes a copy of an old version as the new latest (no files are copied, only references)                                                                          |
 | `delete_artifact`   | Moves an artifact to the trash                                                                                                                                       |
 | `undelete_artifact` | Brings it back from the trash                                                                                                                                        |
+| `list_share_links`  | Public share links of an artifact, or of all of them (read only; see Public share links)                                                                             |
 
 Each `old` in `edits` must occur exactly once at its step, or nothing is published and the call fails with `edit_failed` (`details: { index, occurrences }`). Edits work on html, markdown and code entries.
 
 Deleted artifacts stay in the trash (`/trash` in the web UI) for 30 days. On startup and then every hour, the server deletes artifacts that have been in the trash longer, and then removes stored files that no version uses any more and that are older than an hour.
+
+## Public share links
+
+To show one artifact to someone without an Authentik account, open the Share section on its page in the web UI and create a link. It shows the latest version, or only the version you're looking at, and can carry a label and an expiry. The link is `${CONTENT_ORIGIN}/p/<token>/`: it redirects to the entry file, so relative links in a multi-file artifact keep working, and Markdown, code and images render as they do in the app. The URL is shown once, when you create it: only the SHA-256 of its `sl_` token is stored. The Share section lists the links with their last use and revokes them.
+
+Only the web UI creates or revokes links. Making something public is the owner's decision, so MCP has just the read-only `list_share_links`, so an agent can tell where its work is visible.
+
+Responses under `/p/` differ from the signed `/s/` ones: `frame-ancestors 'none'` (they're opened top-level, not framed), `X-Robots-Tag: noindex, nofollow`, and `Cache-Control: no-store` for latest links (pinned ones may be cached for 5 minutes). An unknown, revoked or expired token, or one whose artifact is deleted, gets the same 404. A deleted artifact's links work again if it is restored. `/p/` is rate limited to 60 requests a minute per client IP, in memory, keyed on the first `X-Forwarded-For` entry, which the ingress sets.
 
 ## Local setup
 
