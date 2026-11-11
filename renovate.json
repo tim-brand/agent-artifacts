@@ -1,0 +1,13 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "docker:pinDigests", "helpers:pinGitHubActionDigests"],
+  "fetchChangeLogs": "pr",
+  "packageRules": [
+    {
+      "description": "pnpm 10 and Node 24 are deliberate choices: move to a new major by hand",
+      "matchPackageNames": ["pnpm", "node", "@types/node"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    }
+  ]
+}

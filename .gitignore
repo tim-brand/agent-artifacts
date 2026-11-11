@@ -1,0 +1,13 @@
+# Artifact store (SQLite and files) and secrets never enter git
+data/
+.env
+.env.*
+!.env.example
+
+node_modules/
+coverage/
+*.tsbuildinfo
+.DS_Store
+.idea/
+.vscode/
+*.log
