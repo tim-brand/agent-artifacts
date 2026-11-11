@@ -231,3 +231,24 @@ test('list_artifacts, list_versions and delete_artifact', async () => {
   const deleted = await callTool(app, 'delete_artifact', { id: 'art1' });
   assert.deepEqual(deleted.json, { deleted: true });
 });
+
+test('get_artifact inlines an SVG but not a raster image', async () => {
+  for (const [path, contentType, inlined] of [
+    ['chart.svg', 'image/svg+xml; charset=utf-8', true],
+    ['shot.png', 'image/png', false],
+  ] as const) {
+    const image: Version = {
+      ...version,
+      entry: path,
+      format: 'image',
+      files: [{ path, size: 6, contentType, sha256: 'x' }],
+    };
+    const { app } = setup({
+      get: async () => ({ artifact: { ...artifact, format: 'image' }, version: image }),
+      readFile: async () => ({ bytes: new TextEncoder().encode('<svg/>'), contentType }),
+    });
+    const { json } = await callTool(app, 'get_artifact', { id: 'art1' });
+    assert.equal(json.entryContent, inlined ? '<svg/>' : undefined, path);
+    assert.equal(typeof json.entryContentOmitted, inlined ? 'undefined' : 'string', path);
+  }
+});

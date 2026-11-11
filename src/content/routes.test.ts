@@ -71,6 +71,16 @@ const store: Record<string, Stored> = {
       ],
     },
   },
+  svg: {
+    format: 'image',
+    entry: 'charts/q3 "big".svg',
+    files: {
+      'charts/q3 "big".svg': [
+        'image/svg+xml; charset=utf-8',
+        '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+      ],
+    },
+  },
   pdf: {
     format: 'pdf',
     entry: 'document.pdf',
@@ -301,4 +311,30 @@ test('a code entry is highlighted and HTML-escaped', async () => {
   const raw = await get(`${signer.url('code', 1, 'main.ts')}?raw=1`);
   assert.equal(raw.headers.get('content-type'), 'text/plain; charset=utf-8');
   assert.equal(await raw.text(), store.code?.files['main.ts']?.[1]);
+});
+
+test('an image entry is a page that centers it; ?raw=1 is the bytes, sandboxed even as SVG', async () => {
+  const pageUrl = signer.url('svg', 1, 'charts/q3 "big".svg');
+  const page = await get(pageUrl);
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get('content-type'), 'text/html; charset=utf-8');
+  assert.match(page.headers.get('content-security-policy') ?? '', SANDBOX);
+  assertSafeHeaders(page);
+  const html = await page.text();
+  assert.match(
+    html,
+    /<img class="image" src="q3%20%22big%22\.svg\?raw=1" alt="Title &lt;svg&gt;">/,
+  );
+  assert.match(html, /<body class="image">/);
+  assert.match(html, /prefers-color-scheme: dark/);
+  assert.doesNotMatch(html, /<script/);
+
+  const src = /src="([^"]+)"/.exec(html)?.[1] ?? '';
+  const raw = await get(new URL(src, pageUrl).href);
+  assert.equal(raw.status, 200);
+  assert.equal(raw.headers.get('content-type'), 'image/svg+xml; charset=utf-8');
+  assert.match(raw.headers.get('content-security-policy') ?? '', SANDBOX);
+  assertSafeHeaders(raw);
+  assert.equal(await raw.text(), store.svg?.files['charts/q3 "big".svg']?.[1]);
+  assert.notEqual(raw.headers.get('etag'), page.headers.get('etag'));
 });

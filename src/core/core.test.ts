@@ -95,7 +95,7 @@ test('publish rejects bad input', async (t) => {
     code('invalid_input'),
   );
   await assert.rejects(
-    artifacts.publish({ title: 't', files: { 'a.png': { base64: '/9j/AAAA' } } }, 'a'),
+    artifacts.publish({ title: 't', files: { 'a.bin': { base64: '/9j/AAAA' } } }, 'a'),
     code('unsupported_format'),
   );
   const { id } = await artifacts.publish({ title: 't', content: 'x', format: 'markdown' }, 'a');
@@ -247,6 +247,121 @@ test('pdf must start with %PDF', async (t) => {
     artifacts.publish({ title: 'p', content: 'not base64!', format: 'pdf' }, 'a'),
     code('invalid_input'),
   );
+});
+
+const IMAGES = {
+  png: Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'),
+  jpg: Buffer.from('ffd8ffe000104a464946', 'hex'),
+  jpeg: Buffer.from('ffd8ffdb0043', 'hex'),
+  gif: Buffer.from('GIF89a\x01\x00\x01\x00', 'latin1'),
+  webp: Buffer.from('RIFF\x24\x00\x00\x00WEBPVP8 ', 'latin1'),
+  svg: Buffer.from('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"/>'),
+};
+
+test('images: every format by content and by files', async (t) => {
+  const { artifacts } = setup(t);
+  for (const [ext, bytes] of Object.entries(IMAGES)) {
+    const base64 = bytes.toString('base64');
+    const byLanguage = await artifacts.publish(
+      { title: ext, content: base64, format: 'image', language: ext.toUpperCase() },
+      'a',
+    );
+    const got = await artifacts.get(byLanguage.id);
+    assert.equal(got?.artifact.format, 'image', ext);
+    assert.equal(got?.version.entry, `image.${ext}`);
+    assert.match(got?.version.files[0]?.contentType ?? '', /^image\//);
+    const file = await artifacts.readFile(byLanguage.id, 1, `image.${ext}`);
+    assert.deepEqual(Buffer.from(file?.bytes ?? []), bytes);
+
+    const byEntry = await artifacts.publish(
+      { title: ext, content: base64, format: 'image', entry: `charts/q3.${ext}` },
+      'a',
+    );
+    assert.equal((await artifacts.get(byEntry.id))?.version.entry, `charts/q3.${ext}`);
+
+    const byFiles = await artifacts.publish(
+      { title: ext, files: { [`shot.${ext}`]: { base64 } } },
+      'a',
+    );
+    assert.equal((await artifacts.get(byFiles.id))?.version.format, 'image');
+  }
+
+  const svg = await artifacts.publish(
+    {
+      title: 'svg text',
+      content: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+      format: 'image',
+      language: 'svg',
+    },
+    'a',
+  );
+  const got = await artifacts.get(svg.id);
+  assert.equal(got?.version.files[0]?.contentType, 'image/svg+xml; charset=utf-8');
+  assert.equal(
+    text((await artifacts.readFile(svg.id, 1, 'image.svg'))?.bytes ?? new Uint8Array()),
+    '<svg xmlns="http://www.w3.org/2000/svg"/>',
+  );
+  const files = await artifacts.publish(
+    { title: 'svg file', files: { 'd.svg': '<svg></svg>' } },
+    'a',
+  );
+  assert.equal((await artifacts.get(files.id))?.version.format, 'image');
+});
+
+test('images: a mismatched signature or a bad name is refused', async (t) => {
+  const { artifacts } = setup(t);
+  const publish = (input: Parameters<typeof artifacts.publish>[0]) =>
+    artifacts.publish({ title: 't', ...input }, 'a');
+  const b64 = (bytes: Buffer) => bytes.toString('base64');
+
+  for (const [ext, wrong] of [
+    ['png', IMAGES.jpg],
+    ['jpg', IMAGES.png],
+    ['gif', IMAGES.webp],
+    ['webp', Buffer.from('RIFF\x24\x00\x00\x00WAVEfmt ', 'latin1')],
+    ['svg', IMAGES.png],
+    ['svg', Buffer.from('<html>no image here</html>')],
+  ] as const) {
+    await assert.rejects(
+      publish({ content: b64(wrong), format: 'image', language: ext }),
+      code('invalid_input'),
+      ext,
+    );
+    await assert.rejects(
+      publish({ files: { [`x.${ext}`]: { base64: b64(wrong) } } }),
+      code('invalid_input'),
+    );
+  }
+  await assert.rejects(
+    publish({ content: '<svg/>', format: 'image', language: 'png' }),
+    code('invalid_input'),
+  );
+  // A name is needed, and it must be an image name.
+  await assert.rejects(
+    publish({ content: b64(IMAGES.png), format: 'image' }),
+    code('invalid_input'),
+  );
+  await assert.rejects(
+    publish({ content: b64(IMAGES.png), format: 'image', language: 'bmp' }),
+    code('invalid_input'),
+  );
+  await assert.rejects(
+    publish({ content: b64(IMAGES.png), format: 'image', entry: '../x.png' }),
+    code('invalid_input'),
+  );
+  await assert.rejects(
+    publish({ content: 'not base64!', format: 'image', language: 'png' }),
+    code('invalid_input'),
+  );
+  // One file only; images inside an html artifact are not checked as an image artifact.
+  await assert.rejects(
+    publish({ files: { 'a.png': { base64: b64(IMAGES.png) }, 'b.txt': 'x' }, entry: 'a.png' }),
+    code('invalid_input'),
+  );
+  await publish({
+    files: { 'index.html': '<img src="a.png">', 'a.png': { base64: 'AAAA' } },
+    entry: 'index.html',
+  });
 });
 
 test('list paginates newest first, filters by format, and hides deleted', async (t) => {

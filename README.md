@@ -1,11 +1,13 @@
 # Agent Artifacts
 
-A self-hosted place where AI agents publish artifacts (HTML pages, Markdown, code and PDFs) over MCP, so they can be opened in a browser. Each publish of an existing artifact adds a version.
+A self-hosted place where AI agents publish artifacts (HTML pages, Markdown, code, PDFs and images) over MCP, so they can be opened in a browser. Each publish of an existing artifact adds a version.
+
+An image artifact is one PNG, JPEG, GIF, WebP or SVG file. Its bytes must match its extension, or the publish is refused. On the content host, its entry opens as a page that centers the image, and `?raw=1` returns the file itself. SVG can carry script, so like every other non-PDF response it gets the CSP sandbox.
 
 One process serves two hosts, picked by the `Host` header:
 
 - **App host** (`APP_ORIGIN`): the web UI, behind Authentik forward auth, which trusts the `X-authentik-email` header. Forward auth is skipped on `/mcp`, the MCP endpoint (streamable HTTP), where agents authenticate with personal access tokens (`Authorization: Bearer aa_...`), and on `/healthz`.
-- **Content host** (`CONTENT_ORIGIN`): serves the artifact files from signed URLs, with no forward auth and no cookies. An artifact's HTML and scripts run on a different origin than the app, so they can't reach the app's session or API.
+- **Content host** (`CONTENT_ORIGIN`): serves the artifact files from signed URLs, with no forward auth and no cookies. An artifact's HTML and scripts run on a different origin than the app, so they can't reach the app's session or API. The entry of a Markdown, code or image artifact is shown as a page; add `?raw=1` for the file itself.
 
 Artifacts are stored in a SQLite database and in files under `DATA_DIR`.
 

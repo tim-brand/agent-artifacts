@@ -48,6 +48,7 @@ function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<Art
   const list: Artifact[] = [
     artifact('a1', 'html', '<script>alert(1)</script>', 3),
     artifact('p1', 'pdf', 'A PDF'),
+    artifact('i1', 'image', 'A chart'),
   ];
   const deleted: string[] = [];
   const artifacts: ArtifactService = {
@@ -60,7 +61,11 @@ function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<Art
       if (!a || !v || v > a.latestVersion) return null;
       return {
         artifact: a,
-        version: version(a, v, a.format === 'pdf' ? 'document.pdf' : 'index.html'),
+        version: version(
+          a,
+          v,
+          { pdf: 'document.pdf', image: 'chart.svg' }[a.format as string] ?? 'index.html',
+        ),
       };
     },
     readFile: async () => null,
@@ -187,6 +192,16 @@ describe('list', () => {
     assert.match(body, /href="\/\?format=pdf&amp;cursor=next-page"/);
   });
 
+  it('has an image chip and badge', async () => {
+    const { app } = fakeDeps({});
+    const all = await (await get(app, '/')).text();
+    assert.match(all, /<a href="\/\?format=image">image<\/a>/);
+    const body = await (await get(app, '/?format=image')).text();
+    assert.match(body, /<a href="\/\?format=image" aria-current="page">image<\/a>/);
+    assert.match(body, /A chart<\/a>\n<span class="badge">image<\/span>/);
+    assert.ok(!body.includes('A PDF'));
+  });
+
   it('shows an empty state that points to /connect', async () => {
     const { app } = fakeDeps({
       artifacts: { list: async () => ({ items: [], nextCursor: null }) },
@@ -215,6 +230,15 @@ describe('artifact page', () => {
     const iframe = body.match(/<iframe[^>]*>/)?.[0] ?? '';
     assert.match(iframe, /document\.pdf/);
     assert.doesNotMatch(iframe, /sandbox/);
+  });
+
+  it('sandboxes image artifacts, since an SVG can carry script', async () => {
+    const { app } = fakeDeps({});
+    const body = await (await get(app, '/a/i1')).text();
+    const iframe = body.match(/<iframe[^>]*>/)?.[0] ?? '';
+    assert.match(iframe, /chart\.svg/);
+    assert.match(iframe, /sandbox="allow-scripts allow-popups/);
+    assert.match(body, /<span class="badge">image<\/span>/);
   });
 
   it('shows the requested version', async () => {
