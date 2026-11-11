@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+
+      - run: pnpm typecheck
+
+      - run: pnpm test
+
+      # image.yml only runs on master, so prove here that its kubectl install works.
+      - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5.2.0
+        with:
+          version: v1.37.1
+
+      - run: kubectl version --client
+
+  image:
+    runs-on: ubuntu-latest
+    env:
+      SIGNING_SECRET: ci-only-signing-secret-0123456789abcdefg
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Canaries: these must stay out of git, the build context and the image, which the next steps
+      # prove. At several depths, and in src/ in particular, because the Dockerfile copies all of it.
+      - name: Plant artifact data and env files in the build context
+        run: |
+          for dir in . src src/core; do
+            mkdir -p "$dir/data/files"
+            for file in artifacts.db artifacts.db-wal artifacts.db-shm files/canary.html; do
+              echo CANARY=1 > "$dir/data/$file"
+            done
+            for file in .env .env.production .env.local; do
+              echo CANARY=1 > "$dir/$file"
+            done
+          done
+
+      - name: Git ignores all of them
+        run: |
+          git status --porcelain
+          test -z "$(git status --porcelain)"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: The build context has none of them, nor any tests
+        run: |
+          printf 'FROM scratch\nCOPY . /context/\n' |
+            docker buildx build -f - -o "type=local,dest=$RUNNER_TEMP/context" .
+          test -f "$RUNNER_TEMP/context/context/package.json"
+          test -f "$RUNNER_TEMP/context/context/src/server.ts"
+          found="$(find "$RUNNER_TEMP/context" \( -name data -o -name '*.db*' -o -iname '*canary*' \
+            -o -name '.env*' ! -name .env.example -o -name '*.test.ts' \) -print)"
+          echo "$found"
+          test -z "$found"
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          platforms: linux/amd64
+          tags: agent-artifacts:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: No data, env files, tests or root user in the image
+        run: |
+          # shellcheck disable=SC2016 # expanded inside the container
+          docker run --rm --entrypoint sh agent-artifacts:ci -c '
+            set -u
+            status=0
+            # Only our own tests: dependencies such as zod ship theirs in node_modules.
+            found="$(find /app /data \( -name "*.db*" -o -iname "*canary*" -o -name ".env*" \
+              -o -path "/app/src/*.test.ts" -o -path /app/data \) -print)"
+            if [ -n "$found" ]; then
+              echo "Forbidden files in the image:"
+              echo "$found"
+              status=1
+            fi
+            if [ "$(id -u)" = "0" ]; then
+              echo "Image runs as root"
+              status=1
+            fi
+            if [ "$(stat -c %U /data)" != "node" ]; then
+              echo "/data is not owned by node"
+              status=1
+            fi
+            if [ -w /app/src/server.ts ]; then
+              echo "The app can change its own code"
+              status=1
+            fi
+            [ "$status" = "0" ] && echo "Image check passed"
+            exit "$status"
+          '
+
+      - name: Start the app
+        run: |
+          docker run -d --name app -p 3000:3000 \
+            -v agent-artifacts-data:/data \
+            -e APP_ORIGIN=http://app.test \
+            -e CONTENT_ORIGIN=http://content.test \
+            -e SIGNING_SECRET \
+            agent-artifacts:ci
+          for _ in $(seq 1 30); do
+            if [ "$(curl -fsS -H 'Host: app.test' http://localhost:3000/healthz)" = "ok" ]; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::/healthz did not answer ok within 30s"
+          exit 1
+
+      # Kubernetes sends SIGTERM on every rollout; node runs as PID 1, so nothing else handles it.
+      - name: Stops cleanly on SIGTERM
+        run: |
+          docker stop --time 10 app
+          code="$(docker inspect app --format '{{.State.ExitCode}}')"
+          echo "Exit code: $code"
+          test "$code" = "0"
+
+      - name: Logs
+        if: failure()
+        run: docker logs app || true

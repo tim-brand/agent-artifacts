@@ -1,0 +1,19 @@
+# Artifacts and secrets must never be baked into an image. Here a pattern only matches at the root
+# of the build context, unless it starts with **/. That matters: the Dockerfile copies all of src/.
+**/data/
+**/*.db
+**/*.db-*
+**/.env
+**/.env.*
+!.env.example
+**/*.log
+
+# Tests stay out of the image
+**/*.test.ts
+tests
+
+.git
+.github
+**/node_modules
+coverage
+docs

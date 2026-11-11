@@ -1,0 +1,304 @@
+import assert from 'node:assert/strict';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { test } from 'node:test';
+import type {
+  Artifact,
+  ArtifactService,
+  ContentSigner,
+  Deps,
+  FileInfo,
+  Format,
+  Version,
+} from '../contracts.ts';
+import { createContentRoutes } from './routes.ts';
+
+const APP = 'https://app.test';
+const CONTENT = 'https://content.test';
+const SECRET = 'x'.repeat(32);
+const SANDBOX = /^sandbox allow-scripts .*; frame-ancestors https:\/\/app\.test$/;
+
+const sign = (id: string, version: number, exp: number) =>
+  createHmac('sha256', SECRET).update(`${id}/${version}/${exp}`).digest('base64url');
+
+const signer: ContentSigner = {
+  url(id, version, path, ttlSeconds = 3600) {
+    const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const rest = path.split('/').map(encodeURIComponent).join('/');
+    return `${CONTENT}/s/${exp}.${sign(id, version, exp)}/${id}/${version}/${rest}`;
+  },
+  verify(id, version, exp, sig) {
+    const expected = Buffer.from(sign(id, version, exp));
+    const given = Buffer.from(sig);
+    return (
+      exp > Date.now() / 1000 &&
+      given.length === expected.length &&
+      timingSafeEqual(given, expected)
+    );
+  },
+};
+
+type Stored = { format: Format; entry: string; files: Record<string, [string, string]> };
+
+const store: Record<string, Stored> = {
+  site: {
+    format: 'html',
+    entry: 'index.html',
+    files: {
+      'index.html': [
+        'text/html; charset=utf-8',
+        '<link href="assets/style.css"><script src="app.js">',
+      ],
+      'app.js': ['text/javascript; charset=utf-8', 'console.log(1)'],
+      'assets/style.css': ['text/css; charset=utf-8', 'body{}'],
+      'my file.txt': ['text/plain; charset=utf-8', 'spaced'],
+    },
+  },
+  doc: {
+    format: 'markdown',
+    entry: 'README.md',
+    files: {
+      'README.md': ['text/markdown; charset=utf-8', '# Hello\n\n| a | b |\n|---|---|\n| 1 | 2 |\n'],
+      'notes.md': ['text/markdown; charset=utf-8', '# Notes'],
+    },
+  },
+  code: {
+    format: 'code',
+    entry: 'main.ts',
+    files: {
+      'main.ts': [
+        'text/plain; charset=utf-8',
+        'const x = "</script><script>alert(1)</script>";\nexport default x;\n',
+      ],
+    },
+  },
+  pdf: {
+    format: 'pdf',
+    entry: 'document.pdf',
+    files: { 'document.pdf': ['application/pdf', '%PDF-1.4 fake'] },
+  },
+};
+
+const readCalls: string[] = [];
+
+const artifacts: ArtifactService = {
+  async get(id, version) {
+    const stored = store[id];
+    if (!stored || version !== 1) return null;
+    const files: FileInfo[] = Object.entries(stored.files).map(([path, [contentType, text]]) => ({
+      path,
+      contentType,
+      size: Buffer.byteLength(text),
+      sha256: createHash('sha256').update(text).digest('hex'),
+    }));
+    const now = new Date(0).toISOString();
+    const artifact: Artifact = {
+      id,
+      title: `Title <${id}>`,
+      description: '',
+      format: stored.format,
+      latestVersion: 1,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const v: Version = {
+      artifactId: id,
+      version: 1,
+      entry: stored.entry,
+      format: stored.format,
+      files,
+      createdAt: now,
+      publishedBy: 'test',
+    };
+    return { artifact, version: v };
+  },
+  async readFile(id, version, path) {
+    readCalls.push(path);
+    const file = version === 1 ? store[id]?.files[path] : undefined;
+    return file ? { contentType: file[0], bytes: new TextEncoder().encode(file[1]) } : null;
+  },
+  list: () => Promise.reject(new Error('unused')),
+  listVersions: () => Promise.reject(new Error('unused')),
+  delete: () => Promise.reject(new Error('unused')),
+  publish: () => Promise.reject(new Error('unused')),
+};
+
+const deps = {
+  config: {
+    port: 0,
+    dataDir: '',
+    appOrigin: APP,
+    contentOrigin: CONTENT,
+    signingSecret: SECRET,
+    devUser: null,
+  },
+  artifacts,
+  signer,
+  tokens: {} as Deps['tokens'],
+} satisfies Deps;
+
+const app = createContentRoutes(deps);
+const get = (url: string, init?: RequestInit) => app.request(url, init);
+
+function assertSafeHeaders(res: Response) {
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(res.headers.get('referrer-policy'), 'no-referrer');
+  assert.equal(res.headers.get('set-cookie'), null);
+  assert.match(
+    res.headers.get('content-security-policy') ?? '',
+    /frame-ancestors https:\/\/app\.test$/,
+  );
+}
+
+test('a valid link serves the bytes with their content type, sandboxed', async () => {
+  const res = await get(signer.url('site', 1, 'index.html'));
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8');
+  assert.equal(await res.text(), store.site?.files['index.html']?.[1]);
+  assert.match(res.headers.get('content-security-policy') ?? '', SANDBOX);
+  assert.match(res.headers.get('cache-control') ?? '', /^private, max-age=(3600|359\d)$/);
+  assert.match(res.headers.get('etag') ?? '', /^"[0-9a-f]{64}"$/);
+  assertSafeHeaders(res);
+});
+
+test('cache lifetime never outlives the link', async () => {
+  const res = await get(signer.url('site', 1, 'app.js', 60));
+  assert.match(res.headers.get('cache-control') ?? '', /^private, max-age=(60|59|58)$/);
+});
+
+test('a matching If-None-Match gets 304', async () => {
+  const url = signer.url('site', 1, 'app.js');
+  const etag = (await get(url)).headers.get('etag') ?? '';
+  const res = await get(url, { headers: { 'if-none-match': etag } });
+  assert.equal(res.status, 304);
+  assertSafeHeaders(res);
+});
+
+test('relative links in a multi-file artifact resolve under the same signed prefix', async () => {
+  const page = signer.url('site', 1, 'index.html');
+  for (const [href, type, body] of [
+    ['app.js', 'text/javascript; charset=utf-8', 'console.log(1)'],
+    ['assets/style.css', 'text/css; charset=utf-8', 'body{}'],
+    ['my%20file.txt', 'text/plain; charset=utf-8', 'spaced'],
+  ] as const) {
+    const res = await get(new URL(href, page).href);
+    assert.equal(res.status, 200, href);
+    assert.equal(res.headers.get('content-type'), type);
+    assert.equal(await res.text(), body);
+  }
+});
+
+test('HEAD returns the headers without a body', async () => {
+  const res = await get(signer.url('site', 1, 'app.js'), { method: 'HEAD' });
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), '');
+  assertSafeHeaders(res);
+});
+
+test('a PDF gets frame-ancestors but no sandbox', async () => {
+  const res = await get(signer.url('pdf', 1, 'document.pdf'));
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/pdf');
+  assert.equal(res.headers.get('content-security-policy'), `frame-ancestors ${APP}`);
+});
+
+test('expired, tampered or mismatched links get 403', async () => {
+  const valid = signer.url('site', 1, 'index.html');
+  const exp = Math.floor(Date.now() / 1000) - 10;
+  const urls = [
+    signer.url('site', 1, 'index.html', -10),
+    `${CONTENT}/s/${exp}.${sign('site', 1, exp)}/site/1/index.html`,
+    valid.replace(/(\/s\/\d+\.)([A-Za-z0-9_-])/, (_, pre, ch) => `${pre}${ch === 'A' ? 'B' : 'A'}`),
+    valid.replace('/site/1/', '/doc/1/'),
+    valid.replace('/site/1/', '/site/2/'),
+    valid.replace(/\/s\/\d+/, (m) => `${m}0`),
+    `${CONTENT}/s/garbage/site/1/index.html`,
+    valid.replace('/site/1/', '/site/01/'),
+    valid.replace('/site/1/', '/site/1.0/'),
+  ];
+  for (const url of urls) {
+    const res = await get(url);
+    assert.equal(res.status, 403, url);
+    assert.equal(res.headers.get('content-type'), 'text/plain; charset=utf-8');
+    assert.equal(await res.text(), 'Link expired or invalid');
+    assertSafeHeaders(res);
+  }
+});
+
+test('path traversal never reaches the store', async () => {
+  const prefix = signer.url('site', 1, 'x').slice(0, -1);
+  readCalls.length = 0;
+  for (const rest of [
+    '..%2F..%2Fetc%2Fpasswd',
+    'assets%2F..%2F..%2Fsecret',
+    'assets/%2e%2e%2fsecret',
+    '..%5Csecret',
+    'a%00b',
+    'a//b',
+    '%E0%A4%A',
+    '',
+  ]) {
+    const res = await get(prefix + rest);
+    assert.ok(res.status === 404 || res.status === 403, `${rest}: ${res.status}`);
+    assertSafeHeaders(res);
+  }
+  // Plain ../ is normalized away by URL parsing, leaving a link that no longer verifies.
+  const res = await get(`${prefix}../../../etc/passwd`);
+  assert.equal(res.status, 403);
+  assert.deepEqual(readCalls, []);
+});
+
+test('missing artifacts, versions, files and other routes are 404', async () => {
+  for (const url of [
+    signer.url('nope', 1, 'index.html'),
+    signer.url('site', 2, 'index.html'),
+    signer.url('site', 1, 'missing.html'),
+    signer.url('site', 1, '').slice(0, -1),
+    `${CONTENT}/`,
+    `${CONTENT}/healthz`,
+    `${CONTENT}/s/`,
+  ]) {
+    const res = await get(url);
+    assert.equal(res.status, 404, url);
+    assertSafeHeaders(res);
+  }
+  const post = await get(signer.url('site', 1, 'index.html'), { method: 'POST' });
+  assert.equal(post.status, 404);
+  assertSafeHeaders(post);
+});
+
+test('a markdown entry is rendered; ?raw=1 and other .md files are raw', async () => {
+  const rendered = await get(signer.url('doc', 1, 'README.md'));
+  assert.equal(rendered.headers.get('content-type'), 'text/html; charset=utf-8');
+  assert.match(rendered.headers.get('content-security-policy') ?? '', SANDBOX);
+  const html = await rendered.text();
+  assert.match(html, /<h1>Hello<\/h1>/);
+  assert.match(html, /<table>/);
+  assert.match(html, /<title>Title &lt;doc&gt;<\/title>/);
+  assert.doesNotMatch(html, /<script/);
+
+  const raw = await get(`${signer.url('doc', 1, 'README.md')}?raw=1`);
+  assert.equal(raw.headers.get('content-type'), 'text/markdown; charset=utf-8');
+  assert.equal(await raw.text(), store.doc?.files['README.md']?.[1]);
+  assert.notEqual(raw.headers.get('etag'), rendered.headers.get('etag'));
+
+  const other = await get(signer.url('doc', 1, 'notes.md'));
+  assert.equal(other.headers.get('content-type'), 'text/markdown; charset=utf-8');
+  assert.equal(await other.text(), '# Notes');
+});
+
+test('a code entry is highlighted and HTML-escaped', async () => {
+  const res = await get(signer.url('code', 1, 'main.ts'));
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8');
+  assert.match(res.headers.get('content-security-policy') ?? '', SANDBOX);
+  const html = await res.text();
+  assert.doesNotMatch(html, /<script/i);
+  assert.doesNotMatch(html, /<\/script/i);
+  assert.match(html, /&lt;\/script&gt;&lt;script&gt;alert\(1\)/);
+  assert.match(html, /class="hljs-keyword">const</);
+  assert.match(html, /prefers-color-scheme: dark/);
+
+  const raw = await get(`${signer.url('code', 1, 'main.ts')}?raw=1`);
+  assert.equal(raw.headers.get('content-type'), 'text/plain; charset=utf-8');
+  assert.equal(await raw.text(), store.code?.files['main.ts']?.[1]);
+});
