@@ -4,12 +4,14 @@ import type {
   ArtifactService,
   CommentService,
   ContentSigner,
+  DataService,
   ShareLinkService,
   TokenService,
 } from '../contracts.ts';
 import { createArtifactService } from './artifacts.ts';
 import { createBlobStore } from './blobs.ts';
 import { createCommentService } from './comments.ts';
+import { createDataService } from './data.ts';
 import { openDb } from './db.ts';
 import { createPurge, type PurgeResult } from './purge.ts';
 import { createShareLinkService } from './share-links.ts';
@@ -19,6 +21,7 @@ import { createTokenService } from './tokens.ts';
 export function createCore(config: Config): {
   artifacts: ArtifactService;
   comments: CommentService;
+  data: DataService;
   tokens: TokenService;
   shareLinks: ShareLinkService;
   signer: ContentSigner;
@@ -32,6 +35,7 @@ export function createCore(config: Config): {
   return {
     artifacts: createArtifactService(db, blobs, config.appOrigin),
     comments: createCommentService(db),
+    data: createDataService(db),
     tokens: createTokenService(db),
     shareLinks: createShareLinkService(db),
     signer: createSigner(config.contentOrigin, config.signingSecret),

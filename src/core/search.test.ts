@@ -219,7 +219,8 @@ test('the migration backfills existing artifacts', async (t) => {
     const db = new DatabaseSync(join(env.config.dataDir, 'artifacts.db'));
     // Later steps run again too, so their tables go as well.
     db.exec(
-      'DROP TABLE artifacts_fts; DROP TABLE share_links; DROP TABLE comments; DROP TABLE threads; PRAGMA user_version = 1',
+      'DROP TABLE artifacts_fts; DROP TABLE share_links; DROP TABLE comments; DROP TABLE threads; ' +
+        'DROP TABLE artifact_data; ALTER TABLE artifacts DROP COLUMN capabilities; ALTER TABLE artifacts DROP COLUMN data_rev; ALTER TABLE artifacts DROP COLUMN data_floor; PRAGMA user_version = 1',
     );
     db.close();
   });

@@ -123,6 +123,27 @@ const MIGRATIONS: Migration[] = [
   );
   CREATE INDEX comments_by_thread ON comments (thread_id, created_at);
   `,
+
+  // Live pages. Capabilities are JSON ({"db":true,"viewer":false}). data_rev counts the artifact's
+  // data writes; each document row keeps the revision of its last write, so a page can poll for
+  // what changed. A delete leaves a tombstone (json NULL) so pollers see it; data_floor is the
+  // revision up to which tombstones have been dropped. ON DELETE CASCADE: the purge takes the data.
+  `
+  ALTER TABLE artifacts ADD COLUMN capabilities TEXT NOT NULL DEFAULT '{}';
+  ALTER TABLE artifacts ADD COLUMN data_rev INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE artifacts ADD COLUMN data_floor INTEGER NOT NULL DEFAULT 0;
+
+  CREATE TABLE artifact_data (
+    artifact_id TEXT NOT NULL REFERENCES artifacts (id) ON DELETE CASCADE,
+    doc_id TEXT NOT NULL,
+    json TEXT,
+    rev INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    PRIMARY KEY (artifact_id, doc_id)
+  ) WITHOUT ROWID;
+  CREATE INDEX artifact_data_by_rev ON artifact_data (artifact_id, rev);
+  `,
 ];
 
 export function openDb(dataDir: string, blobs: BlobStore): DatabaseSync {

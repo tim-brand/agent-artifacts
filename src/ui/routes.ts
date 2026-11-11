@@ -1,5 +1,7 @@
 import { type Context, Hono } from 'hono';
 import { AppError, type Deps, type Format, type ShareLink } from '../contracts.ts';
+import { createApiRoutes } from './api.ts';
+import { docsRuntimePage } from './docs.ts';
 import { APP_JS, contentSecurityPolicy } from './layout.ts';
 import {
   artifactPage,
@@ -134,6 +136,10 @@ export function createUiRoutes(deps: Deps): Hono {
         versions,
         threads,
         url: (path) => signer.url(artifact.id, version.version, path),
+        // Rendered into the page only for an artifact that declares the viewer capability.
+        viewer: artifact.capabilities.viewer
+          ? { email: c.get('user'), name: c.req.header('x-authentik-name') ?? '' }
+          : null,
         shareLinks: links,
         createdLink: created,
       }),
@@ -269,6 +275,10 @@ export function createUiRoutes(deps: Deps): Hono {
   ui.get('/connect', (c) =>
     c.html(connectPage({ user: c.get('user'), appOrigin: config.appOrigin })),
   );
+
+  ui.get('/docs/runtime', (c) => c.html(docsRuntimePage({ user: c.get('user') })));
+
+  ui.route('/api', createApiRoutes(deps));
 
   ui.all('*', notFound);
 

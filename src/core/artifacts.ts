@@ -4,6 +4,7 @@ import {
   AppError,
   type Artifact,
   type ArtifactService,
+  type Capabilities,
   type Edit,
   type FileInfo,
   type Format,
@@ -28,6 +29,7 @@ export type ArtifactRow = {
   description: string;
   format: string;
   latest_version: number;
+  capabilities: string;
   created_at: string;
   updated_at: string;
 };
@@ -53,9 +55,31 @@ const toArtifact = (row: ArtifactRow): Artifact => ({
   description: row.description,
   format: row.format as Format,
   latestVersion: row.latest_version,
+  capabilities: parseCapabilities(row.capabilities),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
+
+export function parseCapabilities(json: string): Capabilities {
+  const value = JSON.parse(json) as Partial<Capabilities>;
+  return { db: value.db === true, viewer: value.viewer === true };
+}
+
+function cleanCapabilities(input: unknown): Capabilities | undefined {
+  if (input === undefined) return undefined;
+  const valid =
+    typeof input === 'object' &&
+    input !== null &&
+    !Array.isArray(input) &&
+    Object.entries(input).every(
+      ([key, value]) => (key === 'db' || key === 'viewer') && typeof value === 'boolean',
+    );
+  if (!valid) {
+    throw new AppError('invalid_input', 'capabilities is { db?: boolean, viewer?: boolean }');
+  }
+  const given = input as Partial<Capabilities>;
+  return { db: given.db === true, viewer: given.viewer === true };
+}
 
 const toFile = (row: FileRow): FileInfo => ({
   path: row.path,
@@ -123,12 +147,12 @@ export function createArtifactService(
   const stmt = {
     artifact: db.prepare('SELECT * FROM artifacts WHERE id = ? AND deleted_at IS NULL'),
     insertArtifact: db.prepare(
-      `INSERT INTO artifacts (id, title, description, format, latest_version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO artifacts (id, title, description, format, latest_version, capabilities, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ),
     updateArtifact: db.prepare(
-      `UPDATE artifacts SET title = ?, description = ?, format = ?, latest_version = ?, updated_at = ?
-       WHERE id = ?`,
+      `UPDATE artifacts SET title = ?, description = ?, format = ?, latest_version = ?, capabilities = ?,
+       updated_at = ? WHERE id = ?`,
     ),
     insertVersion: db.prepare(
       `INSERT INTO versions (artifact_id, version, entry, format, published_by, created_at)
@@ -210,6 +234,7 @@ export function createArtifactService(
     async publish(input: PublishInput, publishedBy: string) {
       const title = cleanTitle(input.title);
       const description = input.description === undefined ? undefined : String(input.description);
+      const capabilities = cleanCapabilities(input.capabilities);
       const edits = input.edits === undefined ? undefined : checkEditsInput(input);
       const prepared = !edits && hasContent(input) ? prepareVersion(input) : null;
 
@@ -263,6 +288,9 @@ export function createArtifactService(
           : (existing?.latest_version ?? 0);
         const newTitle = title ?? existing?.title ?? '';
         const format = next?.format ?? (existing?.format as Format);
+        const caps = JSON.stringify(
+          capabilities ?? parseCapabilities(existing?.capabilities ?? '{}'),
+        );
 
         if (existing) {
           stmt.updateArtifact.run(
@@ -270,11 +298,21 @@ export function createArtifactService(
             description ?? existing.description,
             format,
             version,
+            caps,
             time,
             id,
           );
         } else {
-          stmt.insertArtifact.run(id, newTitle, description ?? '', format, version, time, time);
+          stmt.insertArtifact.run(
+            id,
+            newTitle,
+            description ?? '',
+            format,
+            version,
+            caps,
+            time,
+            time,
+          );
         }
         if (next) insertVersion(id, version, next, publishedBy, time);
         index.reindexArtifact(id);
@@ -294,7 +332,15 @@ export function createArtifactService(
         }
         const time = now();
         const next = existing.latest_version + 1;
-        stmt.updateArtifact.run(existing.title, existing.description, old.format, next, time, id);
+        stmt.updateArtifact.run(
+          existing.title,
+          existing.description,
+          old.format,
+          next,
+          existing.capabilities,
+          time,
+          id,
+        );
         // Only rows are copied: the new version points at the same blobs.
         stmt.insertVersion.run(
           id,

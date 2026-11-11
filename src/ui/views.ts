@@ -175,6 +175,8 @@ export function artifactPage(opts: {
   url: (path: string) => string;
   shareLinks: ShareLink[];
   createdLink?: { url: string; link: ShareLink };
+  /** The signed-in user, for the frame's runtime; only when the artifact declares `viewer`. */
+  viewer?: { email: string; name: string } | null;
 }): Html {
   const { artifact: a, version: v } = opts;
   const entryUrl = opts.url(v.entry);
@@ -203,6 +205,12 @@ ${v.files.map(
   // Chrome refuses to render PDFs in sandboxed frames, so PDFs get none. Without allow-same-origin
   // the other formats run in an opaque origin; the content host is a separate origin either way.
   const sandbox = v.format === 'pdf' ? '' : html` sandbox="${SANDBOX}"`;
+  // For app.js, which answers the frame's runtime calls for this artifact only.
+  const caps = a.capabilities;
+  const runtime = html` data-artifact="${a.id}" data-capabilities="${JSON.stringify(caps)}"${
+    opts.viewer ? html` data-viewer="${JSON.stringify(opts.viewer)}"` : ''
+  }`;
+  const declared = (['db', 'viewer'] as const).filter((k) => caps[k]);
 
   return layout({
     title: a.title,
@@ -212,6 +220,7 @@ ${v.files.map(
 ${a.description ? html`<p class="desc">${a.description}</p>` : ''}
 <div class="bar">
 <span class="badge">${v.format}</span>
+${declared.length ? html`<a class="badge" href="/docs/runtime" title="Capabilities this live page declares">live: ${declared.join(', ')}</a>` : ''}
 ${switcher}
 <span class="muted">${v.publishedBy} · ${time(v.createdAt)}</span>
 <a href="${entryUrl}" target="_blank" rel="noopener noreferrer">Open in new tab</a>
@@ -222,7 +231,7 @@ ${files}
 ${shareSection(a, v, opts.shareLinks, opts.createdLink)}
 <div class="viewer">
 <div class="frame">
-<iframe class="artifact" src="${entryUrl}" title="${a.title}"${sandbox}></iframe>
+<iframe class="artifact" src="${entryUrl}" title="${a.title}"${sandbox}${runtime}></iframe>
 <button type="button" id="comment-on-selection" hidden>Comment on selection</button>
 </div>
 ${commentsPanel(a, v, opts.threads)}
@@ -468,6 +477,8 @@ ${snippet('claude', claude)}
 <p class="muted">In <code>opencode.json</code>. Save the token in <code>~/.agent-artifacts-token</code>.</p>
 ${snippet('opencode', opencode)}
 <h2>Other MCP clients</h2>
-${snippet('generic', generic)}`,
+${snippet('generic', generic)}
+<h2>Live pages</h2>
+<p>HTML artifacts can keep data, such as poll votes or a checklist: see <a href="/docs/runtime">the runtime</a>.</p>`,
   });
 }

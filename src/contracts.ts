@@ -13,12 +13,20 @@ export type FileInfo = {
   sha256: string;
 };
 
+/**
+ * What an HTML artifact's page may use through `window.openArtifacts` when it is opened in the app:
+ * `db` its own documents (see DataService), `viewer` the signed-in user's email and name. Stored on
+ * the artifact, not a version; the server refuses what isn't declared.
+ */
+export type Capabilities = { db: boolean; viewer: boolean };
+
 export type Artifact = {
   id: string;
   title: string;
   description: string;
   format: Format;
   latestVersion: number;
+  capabilities: Capabilities;
   createdAt: string; // ISO 8601
   updatedAt: string;
 };
@@ -64,6 +72,11 @@ export type PublishInput = {
   language?: string;
   /** Refuse with version_conflict when the latest version is no longer this one. */
   expectedVersion?: number;
+  /**
+   * Replaces the artifact's capabilities (a missing key is false). Omit to keep them; a new
+   * artifact starts with none. Works in a settings-only publish too.
+   */
+  capabilities?: Partial<Capabilities>;
 };
 
 export type PublishResult = {
@@ -203,6 +216,81 @@ export const COMMENT_LIMITS = {
   threads: 200,
 } as const;
 
+/** A JSON object; the top level of a stored document. */
+export type JsonObject = { [key: string]: unknown };
+
+/** One document of an artifact's data. It belongs to the artifact, so every version sees it. */
+export type DataDoc = {
+  id: string;
+  data: JsonObject;
+  updatedAt: string;
+  /** The signed-in user's email for a write from the page, the token's name for an agent's. */
+  updatedBy: string;
+};
+
+/** A document set, updated or (with `data: null`) deleted after a revision. */
+export type DataChange = Omit<DataDoc, 'data'> & { data: JsonObject | null };
+
+export type DataChanges = {
+  /** Oldest change first. */
+  items: DataChange[];
+  /** Pass as `since` next time. */
+  rev: number;
+  /** More changes are waiting: ask again with `rev`. */
+  more: boolean;
+  /**
+   * For since 0, or a `since` too old to list the deletes after it: `items` is empty, and the
+   * reader should drop what it had, read everything with list() and go on from `rev`.
+   */
+  reset: boolean;
+};
+
+/** Equality on top-level fields only; values are strings, numbers, booleans or null. */
+export type DataWhere = Record<string, string | number | boolean | null>;
+
+export type DataQuery = {
+  where?: DataWhere;
+  /** A top-level field. Default (and ties): the document id. */
+  orderBy?: string;
+  order?: 'asc' | 'desc';
+  limit?: number; // default and max DATA_LIMITS.page
+};
+
+/**
+ * Documents of an artifact, for its page (through the app's /api) and for agents (MCP). Every call
+ * fails with not_found for a missing or deleted artifact and with forbidden when the artifact
+ * doesn't declare the `db` capability.
+ */
+export interface DataService {
+  /** Null when there is no such document. */
+  get(artifactId: string, docId: string): Promise<DataDoc | null>;
+  /** Creates or replaces the document. */
+  set(artifactId: string, docId: string, data: JsonObject, by: string): Promise<DataDoc>;
+  /** Merges `fields` into the document's top level, creating it when missing. */
+  update(artifactId: string, docId: string, fields: JsonObject, by: string): Promise<DataDoc>;
+  /** False when there was no such document. */
+  delete(artifactId: string, docId: string, by: string): Promise<boolean>;
+  /** By document id. */
+  list(artifactId: string, query?: { cursor?: string; limit?: number }): Promise<Page<DataDoc>>;
+  query(artifactId: string, query?: DataQuery): Promise<DataDoc[]>;
+  /** What changed after revision `since`, for polling. Start with since 0: see `reset`. */
+  changes(artifactId: string, since: number): Promise<DataChanges>;
+}
+
+export const DATA_LIMITS = {
+  /** Bytes of a document's JSON. */
+  docBytes: 256 * 1024,
+  /** Live documents per artifact. */
+  docs: 10_000,
+  /** Document ids and field names: this many characters of [A-Za-z0-9_-]. */
+  docId: 128,
+  field: 64,
+  /** Documents per list, query or changes call. */
+  page: 100,
+  /** Fields in a query's `where`. */
+  where: 10,
+} as const;
+
 export type TokenInfo = {
   id: string;
   name: string;
@@ -281,7 +369,8 @@ export class AppError extends Error {
     | 'version_conflict'
     | 'too_large'
     | 'unsupported_format'
-    | 'edit_failed';
+    | 'edit_failed'
+    | 'forbidden';
   readonly details?: Record<string, unknown>;
 
   constructor(code: AppError['code'], message: string, details?: Record<string, unknown>) {
@@ -306,6 +395,7 @@ export type Deps = {
   config: import('./config.ts').Config;
   artifacts: ArtifactService;
   comments: CommentService;
+  data: DataService;
   tokens: TokenService;
   shareLinks: ShareLinkService;
   signer: ContentSigner;
