@@ -30,8 +30,10 @@
     if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
     handlers.get(data.type)?.(data);
   });
-  // The frame's origin is opaque, so it can't be named. What goes here must be fine for the artifact
-  // (or a page it navigated its frame to) to read.
+  // '*' because the sandboxed frame's origin is opaque and can't be named. So whatever is sent here may
+  // be read by the artifact, or by any page it navigated its own frame to. That is acceptable for what
+  // we send: comment quotes, which are the artifact's own text. Never send comment bodies, authors or
+  // anything else from the app through this.
   const toFrame = (message) => frame?.contentWindow?.postMessage(message, '*');
 
   // Comments.
