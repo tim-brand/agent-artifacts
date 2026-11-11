@@ -1,18 +1,26 @@
+import { isUtf8 } from 'node:buffer';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   AppError,
   type Artifact,
   type ArtifactService,
+  type Edit,
   type FileInfo,
   type Format,
+  LIMITS,
   type PublishInput,
   type Version,
 } from '../contracts.ts';
 import type { BlobStore } from './blobs.ts';
 import { transaction } from './db.ts';
+import { applyEdits, checkEditsInput } from './edits.ts';
 import { hasContent, prepareVersion } from './files.ts';
 import { now, randomId } from './ids.ts';
 import { createSearchIndex } from './search.ts';
+
+const EDITABLE: readonly Format[] = ['html', 'markdown', 'code'];
+
+type NewVersion = { entry: string; format: Format; files: FileInfo[] };
 
 export type ArtifactRow = {
   id: string;
@@ -146,16 +154,64 @@ export function createArtifactService(
        ORDER BY updated_at DESC, id DESC LIMIT ?`,
     ),
     delete: db.prepare('UPDATE artifacts SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL'),
+    undelete: db.prepare(
+      'UPDATE artifacts SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL',
+    ),
+    deleted: db.prepare(
+      'SELECT * FROM artifacts WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC, id DESC',
+    ),
+    copyFiles: db.prepare(
+      `INSERT INTO version_files (artifact_id, version, path, size, content_type, sha256)
+       SELECT artifact_id, ?, path, size, content_type, sha256 FROM version_files
+       WHERE artifact_id = ? AND version = ?`,
+    ),
   };
 
   const index = createSearchIndex(db, blobs);
   const findArtifact = (id: string) => stmt.artifact.get(id) as ArtifactRow | undefined;
 
+  const insertVersion = (id: string, version: number, v: NewVersion, by: string, time: string) => {
+    stmt.insertVersion.run(id, version, v.entry, v.format, by, time);
+    for (const f of v.files) {
+      stmt.insertFile.run(id, version, f.path, f.size, f.contentType, f.sha256);
+    }
+  };
+
+  /** Runs inside the publish transaction, so the edits apply to the version that is latest now. */
+  const editLatest = (artifact: ArtifactRow, edits: Edit[]): NewVersion => {
+    const latest = stmt.version.get(artifact.id, artifact.latest_version) as VersionRow;
+    const format = latest.format as Format;
+    if (!EDITABLE.includes(format)) {
+      throw new AppError(
+        'invalid_input',
+        `edits only work on html, markdown and code, not ${format}`,
+      );
+    }
+    const files = (stmt.files.all(artifact.id, latest.version) as FileRow[]).map(toFile);
+    const entry = files.find((f) => f.path === latest.entry);
+    if (!entry) throw new Error(`Entry ${latest.entry} of ${artifact.id} has no file`);
+    const bytes = blobs.readSync(entry.sha256);
+    if (!isUtf8(bytes)) {
+      throw new AppError('invalid_input', `edits need a UTF-8 text entry file`);
+    }
+    const edited = new TextEncoder().encode(applyEdits(new TextDecoder().decode(bytes), edits));
+    if (edited.byteLength > LIMITS.fileBytes) {
+      throw new AppError('too_large', `${entry.path} is larger than ${LIMITS.fileBytes} bytes`);
+    }
+    const replaced = { ...entry, size: edited.byteLength, sha256: blobs.putSync(edited) };
+    return {
+      entry: latest.entry,
+      format,
+      files: files.map((f) => (f.path === entry.path ? replaced : f)),
+    };
+  };
+
   return {
     async publish(input: PublishInput, publishedBy: string) {
       const title = cleanTitle(input.title);
       const description = input.description === undefined ? undefined : String(input.description);
-      const prepared = hasContent(input) ? prepareVersion(input) : null;
+      const edits = input.edits === undefined ? undefined : checkEditsInput(input);
+      const prepared = !edits && hasContent(input) ? prepareVersion(input) : null;
 
       if (input.id === undefined) {
         if (!title) throw new AppError('invalid_input', 'title is required for a new artifact');
@@ -167,11 +223,20 @@ export function createArtifactService(
         throw new AppError('not_found', `Artifact ${input.id} not found`);
       }
 
-      const stored = prepared
-        ? await Promise.all(
-            prepared.files.map(async (f) => ({ ...f, sha256: await blobs.put(f.bytes) })),
-          )
-        : [];
+      const stored: NewVersion | null = prepared
+        ? {
+            entry: prepared.entry,
+            format: prepared.format,
+            files: await Promise.all(
+              prepared.files.map(async (f) => ({
+                path: f.path,
+                size: f.bytes.byteLength,
+                contentType: f.contentType,
+                sha256: await blobs.put(f.bytes),
+              })),
+            ),
+          }
+        : null;
 
       return transaction(db, () => {
         const time = now();
@@ -192,11 +257,12 @@ export function createArtifactService(
         }
 
         const id = existing?.id ?? randomId();
-        const version = prepared
+        const next = edits && existing ? editLatest(existing, edits) : stored;
+        const version = next
           ? (existing?.latest_version ?? 0) + 1
           : (existing?.latest_version ?? 0);
         const newTitle = title ?? existing?.title ?? '';
-        const format = prepared?.format ?? (existing?.format as Format);
+        const format = next?.format ?? (existing?.format as Format);
 
         if (existing) {
           stmt.updateArtifact.run(
@@ -210,14 +276,36 @@ export function createArtifactService(
         } else {
           stmt.insertArtifact.run(id, newTitle, description ?? '', format, version, time, time);
         }
-        if (prepared) {
-          stmt.insertVersion.run(id, version, prepared.entry, format, publishedBy, time);
-          for (const f of stored) {
-            stmt.insertFile.run(id, version, f.path, f.bytes.byteLength, f.contentType, f.sha256);
-          }
-        }
+        if (next) insertVersion(id, version, next, publishedBy, time);
         index.reindexArtifact(id);
         return { id, version, title: newTitle, url: `${appOrigin}/a/${id}` };
+      });
+    },
+
+    async restoreVersion(id, version, publishedBy) {
+      return transaction(db, () => {
+        const existing = findArtifact(id);
+        const old = existing && (stmt.version.get(id, version) as VersionRow | undefined);
+        if (!existing || !old) {
+          throw new AppError('not_found', `Version ${version} of artifact ${id} not found`, {
+            id,
+            version,
+          });
+        }
+        const time = now();
+        const next = existing.latest_version + 1;
+        stmt.updateArtifact.run(existing.title, existing.description, old.format, next, time, id);
+        // Only rows are copied: the new version points at the same blobs.
+        stmt.insertVersion.run(
+          id,
+          next,
+          old.entry,
+          old.format,
+          `${publishedBy} (restored v${version})`,
+          time,
+        );
+        stmt.copyFiles.run(next, id, version);
+        return { id, version: next, title: existing.title, url: `${appOrigin}/a/${id}` };
       });
     },
 
@@ -282,6 +370,17 @@ export function createArtifactService(
         if (deleted) index.reindexArtifact(id);
         return deleted;
       });
+    },
+
+    async undelete(id) {
+      return stmt.undelete.run(id).changes > 0;
+    },
+
+    async listDeleted() {
+      return (stmt.deleted.all() as (ArtifactRow & { deleted_at: string })[]).map((row) => ({
+        ...toArtifact(row),
+        deletedAt: row.deleted_at,
+      }));
     },
   };
 }

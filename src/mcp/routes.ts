@@ -13,7 +13,8 @@ const MAX_BODY_BYTES = LIMITS.publishBytes * 2 + MB;
 
 const INSTRUCTIONS = `agent-artifacts stores and shares artifacts you make: HTML pages, Markdown documents, code, PDFs and images.
 Publish with publish_artifact and give the returned url to the user; they open it in the web app.
-Every publish of an existing id makes a new version; old versions stay readable.
+Every publish of an existing id makes a new version; old versions stay readable, and restore_version brings one back.
+For small changes, publish_artifact with \`edits\` instead of resending the whole file.
 Use search_artifacts (by text) or list_artifacts (newest first) to find earlier work, and get_artifact to read it before you publish a new version of it.`;
 
 const formatSchema = z.enum(['html', 'markdown', 'code', 'pdf', 'image']);
@@ -24,9 +25,10 @@ Content, choose one:
 - One file: \`content\` + \`format\` (html, markdown, code, pdf or image). For pdf, \`content\` is base64. For code, set \`language\` (e.g. "ts", "python"). The file is stored as index.html, README.md, main.<ext> or document.pdf.
 - An image (png, jpg, gif, webp or svg; a diagram, chart or screenshot): \`content\` is base64 (an SVG may also be its text), with \`format\` "image" and either \`entry\` as the file name (e.g. "chart.png") or \`language\` as the extension (e.g. "png"). The bytes must match the extension. An image artifact has one file; for a page with several images, publish html with files.
 - Several files: \`files\` maps a relative path to its text, or to {"base64": "..."} for binary files (images, fonts, pdf); \`entry\` names the file to open (e.g. "index.html"), and \`format\` says what it is. Relative links between files in an HTML artifact work.
+- Small edits to an existing artifact: \`id\` + \`edits\`, a list of {"old": "...", "new": "..."} applied in order to the latest version's entry file (html, markdown or code); all other files are kept. Prefer this over resending everything for small changes, and call get_artifact first so \`old\` matches the current text exactly. Each \`old\` must occur exactly once at its step; otherwise nothing is published and the call fails with edit_failed and details {index, occurrences}. Include enough surrounding text to make \`old\` unique.
 
 New artifact: omit \`id\`; \`title\` is required.
-New version: pass the artifact's \`id\` with new content/files. Pass \`expectedVersion\` (the version you last saw) to fail with version_conflict instead of overwriting someone else's newer version.
+New version: pass the artifact's \`id\` with new content/files or edits. Pass \`expectedVersion\` (the version you last saw) to fail with version_conflict instead of overwriting someone else's newer version.
 Settings only: pass \`id\` with only \`title\` and/or \`description\` (no content or files) to change them without making a version.
 
 Limits: ${LIMITS.publishBytes / MB} MB decoded per publish, ${LIMITS.fileBytes / MB} MB per file, ${LIMITS.files} files. Base64 is a third larger than the bytes and all of it goes inline in this call, so a big image (several MB) makes a very large request: prefer a compact PNG, JPEG or WebP, or an SVG.`;
@@ -64,6 +66,16 @@ const publishSchema = {
     .describe(
       'For code: the language, e.g. "ts", "python". For an image: its extension, e.g. "png"',
     ),
+  edits: z
+    .array(
+      z.object({
+        old: z.string().min(1).describe('Exact text to replace; must occur exactly once'),
+        new: z.string().describe('Replacement text'),
+      }),
+    )
+    .min(1)
+    .optional()
+    .describe('With id: edits to the latest version entry file, applied in order'),
   expectedVersion: z
     .number()
     .int()
@@ -221,7 +233,7 @@ function createServer(deps: Deps, publishedBy: string): McpServer {
     'delete_artifact',
     {
       description:
-        'Delete an artifact with all its versions. This is a soft delete: it disappears from the app and from these tools, but the files are kept on the server, so an admin can restore it.',
+        'Delete an artifact with all its versions. It goes to the trash: it disappears from the app and from these tools, and undelete_artifact brings it back. After 30 days in the trash it is deleted for good.',
       inputSchema: { id: z.string() },
       annotations: { destructiveHint: true, idempotentHint: true },
     },
@@ -229,6 +241,35 @@ function createServer(deps: Deps, publishedBy: string): McpServer {
       if (!(await artifacts.delete(id))) throw notFound(id);
       return { deleted: true };
     }),
+  );
+
+  server.registerTool(
+    'undelete_artifact',
+    {
+      description:
+        'Bring a deleted artifact back from the trash, with all its versions. Works for 30 days after the delete.',
+      inputSchema: { id: z.string() },
+      annotations: { idempotentHint: true },
+    },
+    tool(async ({ id }) => {
+      if (!(await artifacts.undelete(id))) {
+        throw new AppError('not_found', `Artifact ${id} is not in the trash`, { id });
+      }
+      return { undeleted: true, url: pageUrl(id) };
+    }),
+  );
+
+  server.registerTool(
+    'restore_version',
+    {
+      description:
+        'Make an old version the latest again, by publishing a copy of it as a new version. Earlier versions, including the one it replaces, stay readable. Returns {id, version, title, url} of the new version.',
+      inputSchema: {
+        id: z.string(),
+        version: z.number().int().positive().describe('The version to restore'),
+      },
+    },
+    tool(async ({ id, version }) => artifacts.restoreVersion(id, version, publishedBy)),
   );
 
   return server;

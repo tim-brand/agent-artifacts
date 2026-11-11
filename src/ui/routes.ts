@@ -9,6 +9,7 @@ import {
   messagePage,
   searchPage,
   tokensPage,
+  trashPage,
 } from './views.ts';
 
 type Env = { Variables: { user: string } };
@@ -114,6 +115,22 @@ export function createUiRoutes(deps: Deps): Hono {
   ui.post('/a/:id/delete', async (c) => {
     if (!(await artifacts.delete(c.req.param('id')))) return notFound(c);
     return c.redirect('/', 303);
+  });
+
+  ui.post('/a/:id/v/:version/restore', async (c) => {
+    const version = versionParam(c.req.param('version'));
+    if (version === null) return notFound(c);
+    const restored = await artifacts.restoreVersion(c.req.param('id'), version, c.get('user'));
+    return c.redirect(`/a/${encodeURIComponent(restored.id)}`, 303);
+  });
+
+  ui.get('/trash', async (c) =>
+    c.html(trashPage({ user: c.get('user'), items: await artifacts.listDeleted() })),
+  );
+
+  ui.post('/trash/:id/restore', async (c) => {
+    if (!(await artifacts.undelete(c.req.param('id')))) return notFound(c);
+    return c.redirect('/trash', 303);
   });
 
   ui.get('/settings/tokens', async (c) =>

@@ -53,6 +53,8 @@ function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<Art
   ];
   const deleted: string[] = [];
   const searched: SearchQuery[] = [];
+  const undeleted: string[] = [];
+  const restored: { id: string; version: number; publishedBy: string }[] = [];
   const artifacts: ArtifactService = {
     publish: async () => {
       throw new Error('not used');
@@ -95,6 +97,22 @@ function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<Art
       deleted.push(id);
       return list.some((a) => a.id === id);
     },
+    undelete: async (id) => {
+      undeleted.push(id);
+      return id === 'gone1';
+    },
+    listDeleted: async () => [
+      {
+        ...artifact('gone1', 'markdown', 'Old <i>notes</i>'),
+        deletedAt: '2026-01-03T00:00:00.000Z',
+      },
+    ],
+    restoreVersion: async (id, n, publishedBy) => {
+      restored.push({ id, version: n, publishedBy });
+      const a = list.find((x) => x.id === id);
+      if (!a || n > a.latestVersion) throw new AppError('not_found', 'gone');
+      return { id, version: a.latestVersion + 1, title: a.title, url: `${APP}/a/${id}` };
+    },
     ...overrides.artifacts,
   };
 
@@ -130,7 +148,7 @@ function fakeDeps(overrides: { config?: Partial<Config>; artifacts?: Partial<Art
     ...overrides.config,
   };
   const deps: Deps = { config, artifacts, tokens, signer };
-  return { app: createUiRoutes(deps), deleted, searched };
+  return { app: createUiRoutes(deps), deleted, searched, undeleted, restored };
 }
 
 const get = (app: ReturnType<typeof fakeDeps>['app'], path: string) =>
@@ -394,6 +412,63 @@ describe('POST', () => {
     assert.equal(res.status, 303);
     assert.equal(res.headers.get('location'), '/settings/tokens');
     assert.equal((await post(app, '/settings/tokens/nope/revoke', {}, APP)).status, 404);
+  });
+});
+
+describe('restore a version', () => {
+  it('shows the button only on versions that are not the latest', async () => {
+    const { app } = fakeDeps({});
+    const old = await (await get(app, '/a/a1/v/2')).text();
+    assert.match(old, /<form class="inline" method="post" action="\/a\/a1\/v\/2\/restore">/);
+    assert.match(old, /Restore this version/);
+    const latest = await (await get(app, '/a/a1')).text();
+    assert.doesNotMatch(latest, /Restore this version/);
+    assert.doesNotMatch(await (await get(app, '/a/a1/v/3')).text(), /Restore this version/);
+  });
+
+  it('restores as the signed-in user and redirects to the artifact', async () => {
+    const { app, restored } = fakeDeps({});
+    const res = await post(app, '/a/a1/v/2/restore', {}, APP);
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), '/a/a1');
+    assert.deepEqual(restored, [{ id: 'a1', version: 2, publishedBy: 'owner@example.com' }]);
+    assert.equal((await post(app, '/a/a1/v/9/restore', {}, APP)).status, 404);
+    assert.equal((await post(app, '/a/a1/v/0/restore', {}, APP)).status, 404);
+  });
+
+  it('rejects a foreign Origin', async () => {
+    const { app, restored } = fakeDeps({});
+    assert.equal((await post(app, '/a/a1/v/2/restore', {})).status, 403);
+    assert.equal((await post(app, '/a/a1/v/2/restore', {}, CONTENT)).status, 403);
+    assert.deepEqual(restored, []);
+  });
+});
+
+describe('trash', () => {
+  it('lists deleted artifacts escaped, with the delete date and a restore button', async () => {
+    const { app } = fakeDeps({});
+    const res = await get(app, '/trash');
+    const body = await res.text();
+    assert.equal(res.status, 200);
+    assert.ok(body.includes('Old &lt;i&gt;notes&lt;/i&gt;'));
+    assert.match(body, /deleted <time datetime="2026-01-03T00:00:00.000Z"/);
+    assert.match(body, /action="\/trash\/gone1\/restore"/);
+    assert.match(body, /<a href="\/trash" aria-current="page">Trash<\/a>/);
+  });
+
+  it('shows an empty trash', async () => {
+    const { app } = fakeDeps({ artifacts: { listDeleted: async () => [] } });
+    assert.match(await (await get(app, '/trash')).text(), /The trash is empty/);
+  });
+
+  it('restores with the app Origin only', async () => {
+    const { app, undeleted } = fakeDeps({});
+    assert.equal((await post(app, '/trash/gone1/restore', {}, 'https://evil.test')).status, 403);
+    assert.deepEqual(undeleted, []);
+    const res = await post(app, '/trash/gone1/restore', {}, APP);
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), '/trash');
+    assert.equal((await post(app, '/trash/nope/restore', {}, APP)).status, 404);
   });
 });
 
