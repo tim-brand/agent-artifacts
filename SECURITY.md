@@ -1,0 +1,36 @@
+# Security policy
+
+## Reporting a vulnerability
+
+Report it privately through GitHub's private vulnerability reporting: open the repository's Security tab and choose "Report a vulnerability", or go to <https://github.com/tim-brand/agent-artifacts/security/advisories/new>.
+
+Do not report a vulnerability in a public issue or pull request.
+
+A report helps most when it has:
+
+- the version or commit you ran;
+- how it is deployed (Docker or not, which reverse proxy, whether the app and content hosts are separate);
+- steps to reproduce it, as short as you can make them;
+- the impact: what an attacker gains, and what they need to start.
+
+## What to expect
+
+One person maintains this project in their spare time. Reports are read and answered as soon as possible, but there is no guaranteed response time. Fixes go to `master`. Only the latest version is supported.
+
+## What counts as a vulnerability
+
+The app makes these promises. Breaking one is a vulnerability:
+
+- Artifact content only runs on the content origin, never on the app origin.
+- The identity headers are trusted only in the web UI, which sits behind the sign-in proxy. Nothing else reads them: not `/mcp`, not the content host, not a public endpoint.
+- Tokens and other credentials the app issues are stored only as hashes, compared in constant time, and never logged.
+- Writes from the web UI pass the Origin check (CSRF).
+- Everything that comes from an artifact, an agent or a user is escaped.
+- Artifact frames keep their iframe sandbox rules.
+- Nothing sent over MCP can create or forge the owner's own words or decisions.
+
+`AGENTS.md` has the full rules.
+
+## What does not count
+
+The app has no sign-in of its own. It trusts the identity header that the reverse proxy in front of it sends. An instance that can be reached without that proxy, or whose proxy passes a client's own identity headers through, is a deployment mistake, not a vulnerability in the app. The deployment section of the README explains what the proxy must do.
