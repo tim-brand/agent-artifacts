@@ -27,6 +27,7 @@ A query is plain words: every word must match, the last also as a prefix, and ac
 | `search_artifacts`     | Full-text search, best match first (see Search)                                                                                                                      |
 | `list_versions`        | All versions of an artifact, newest first                                                                                                                            |
 | `restore_version`      | Publishes a copy of an old version as the new latest (no files are copied, only references)                                                                          |
+| `compare_versions`     | What changed between two versions: the changed files and a unified diff (see Compare versions)                                                                       |
 | `delete_artifact`      | Moves an artifact to the trash                                                                                                                                       |
 | `undelete_artifact`    | Brings it back from the trash                                                                                                                                        |
 | `list_share_links`     | Public share links of an artifact, or of all of them (read only; see Public share links)                                                                             |
@@ -43,6 +44,17 @@ A query is plain words: every word must match, the last also as a prefix, and ac
 Each `old` in `edits` must occur exactly once at its step, or nothing is published and the call fails with `edit_failed` (`details: { index, occurrences }`). Edits work on html, markdown and code entries.
 
 Deleted artifacts stay in the trash (`/trash` in the web UI) for 30 days. On startup and then every hour, the server deletes artifacts that have been in the trash longer, and then removes stored files that no version uses any more and that are older than an hour.
+
+## Compare versions
+
+Each version stores how many lines its entry file adds and removes against the previous version's entry (`linesAdded`, `linesRemoved`; v1 counts against nothing). They're counted on every publish, edit and restore, for html, markdown, code and SVG entries; other formats, and a diff that takes longer than half a second, leave them null. A migration step counted them for the versions that already existed, deleted artifacts included.
+
+- **Versions panel.** Each version shows `+18 −4`, linked to its changes against the version before it. The pane's Compare button compares the version on screen with the one before it, and each other version's Compare compares it with the one on screen.
+- **Compare page** (`/a/:id/compare?from=3&to=7`, defaults: the latest against the one before it). _Changes_ is a unified line diff with 3 lines of context, unchanged runs collapsed to "12 unchanged lines", rendered on the server with every line escaped. For a multi-file version it lists the files added, removed and changed, and diffs each text file; binary files are listed only. When the newer version opens another entry file and neither path is in both, the entry counts as renamed and is diffed against the old one. _Side by side_ (`&mode=side`) shows both versions in two frames with the artifact page's sandbox. They get no runtime port, so a live page's `db` calls there reject with `no_shell`.
+- **MCP.** `compare_versions({ id, from?, to? })` returns the file changes and the unified diff as `patch` (`--- a/path`, `+++ b/path`), with the same defaults. Pass a comment thread's `version` as `from` to see what changed since then.
+- **Limits.** One comparison's diff stops at 200 KB (`truncated`, in the page and over MCP), and its diffs get 2 seconds together; a file past that is shown as too large to diff.
+
+The diff is the [`diff`](https://github.com/kpdecker/jsdiff) package (jsdiff, BSD-3-Clause, no dependencies): Myers' algorithm as in git, with a time limit per diff, which a hand-written line diff would need too.
 
 ## Public share links
 

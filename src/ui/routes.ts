@@ -20,6 +20,8 @@ import {
 } from './layout.ts';
 import {
   artifactPage,
+  type CompareMode,
+  comparePage,
   connectPage,
   FORMATS,
   LIBRARY_TABS,
@@ -277,6 +279,35 @@ export function createUiRoutes(deps: Deps): Hono {
   ui.get('/a/:id/v/:version', (c) => {
     const version = versionParam(c.req.param('version'));
     return version === null ? notFound(c) : showArtifact(c, c.req.param('id'), version);
+  });
+
+  // ?from=&to= (default: the latest against the one before it), &mode=side for the two frames.
+  ui.get('/a/:id/compare', async (c) => {
+    const id = c.req.param('id');
+    const latest = (await artifacts.get(id))?.artifact.latestVersion;
+    const given = (name: string) => {
+      const value = c.req.query(name);
+      return value === undefined || value === '' ? undefined : versionParam(value);
+    };
+    const to = given('to');
+    const from = given('from');
+    if (!latest || to === null || from === null) return notFound(c);
+    const end = to ?? latest;
+    const comparison = await artifacts.compare(id, from ?? Math.max(1, end - 1), end);
+    const versions = comparison && (await artifacts.listVersions(id));
+    if (!comparison || !versions) return notFound(c);
+    const user = c.get('user');
+    return c.html(
+      comparePage({
+        user,
+        name: c.req.header('x-authentik-name') || user,
+        theme: theme(c),
+        comparison,
+        versions,
+        mode: oneOf<CompareMode>(['changes', 'side'], c.req.query('mode')) ?? 'changes',
+        url: (version, path) => signer.url(id, version, path),
+      }),
+    );
   });
 
   ui.post('/a/:id/delete', async (c) => {

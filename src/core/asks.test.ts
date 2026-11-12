@@ -268,7 +268,12 @@ test('the asks migration runs on an existing database', async (t) => {
   const id = await ctx.publish();
   await ctx.comments.add({ artifactId: id, body: 'from before' }, OWNER);
   // Back to the schema before asks, as on the deployed instance.
-  ctx.withDb((db) => db.exec('DROP TABLE asks; PRAGMA user_version = 5'));
+  ctx.withDb((db) =>
+    db.exec(
+      'DROP TABLE asks; ALTER TABLE versions DROP COLUMN lines_added; ' +
+        'ALTER TABLE versions DROP COLUMN lines_removed; PRAGMA user_version = 5',
+    ),
+  );
   const thread = await ctx.comments.add({ artifactId: id, body: '', ask: ASK }, AGENT);
   assert.equal(thread.comments[0]?.ask?.answer, null);
   assert.equal((await ctx.comments.list(id))?.length, 2);

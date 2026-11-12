@@ -313,6 +313,7 @@ test('the live pages migration runs on an existing database', async (t) => {
     db.exec(
       'DROP TABLE asks; DROP TABLE artifact_data; ALTER TABLE artifacts DROP COLUMN capabilities; ' +
         'ALTER TABLE artifacts DROP COLUMN data_rev; ALTER TABLE artifacts DROP COLUMN data_floor; ' +
+        'ALTER TABLE versions DROP COLUMN lines_added; ALTER TABLE versions DROP COLUMN lines_removed; ' +
         'PRAGMA user_version = 4',
     );
   });
