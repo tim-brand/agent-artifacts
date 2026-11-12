@@ -22,7 +22,7 @@ export const OAUTH_LIMITS = {
 } as const;
 
 /**
- * The OAuth paths the ingress leaves open (no forward auth, X-authentik-* blanked), each exact:
+ * The OAuth paths the proxy leaves open (no sign-in, identity headers blanked), each exact:
  * GET for the metadata, POST for register and token. The consent page, /oauth/authorize, is not
  * one of them: it stays behind forward auth.
  */

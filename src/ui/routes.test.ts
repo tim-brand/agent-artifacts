@@ -373,6 +373,8 @@ function fakeDeps(overrides: {
     contentOrigin: CONTENT,
     signingSecret: 'x'.repeat(32),
     devUser: null,
+    authEmailHeader: 'X-authentik-email',
+    authNameHeader: 'X-authentik-name',
     ...overrides.config,
   };
   const data = {} as Deps['data'];
@@ -467,6 +469,64 @@ describe('auth', () => {
     assert.match(body, /<span class="who-name">Tim &lt;Brand&gt;<\/span>/);
     assert.match(body, /<small>owner@example\.com<\/small>/);
     assert.match(body, /<span class="av" aria-hidden="true">TB<\/span>/);
+  });
+
+  it('reads the configured identity headers, and no longer the Authentik ones', async () => {
+    const { app } = fakeDeps({
+      config: { authEmailHeader: 'X-Auth-Email', authNameHeader: 'X-Auth-Name' },
+    });
+    const ok = await app.request(`${APP}/`, {
+      headers: { 'x-auth-email': 'me@example.com', 'X-Auth-Name': 'Me Too' },
+    });
+    assert.equal(ok.status, 200);
+    const page = await ok.text();
+    assert.match(page, /Me Too/);
+    const old = await app.request(`${APP}/`, {
+      headers: { 'X-authentik-email': 'owner@example.com', 'X-authentik-name': 'Old' },
+    });
+    assert.equal(old.status, 401);
+  });
+
+  it('names the expected header, escaped, on the not signed in page', async () => {
+    const { app } = fakeDeps({ config: { authEmailHeader: 'X-Auth-Email' } });
+    const body = await (await app.request(`${APP}/`)).text();
+    assert.match(body, /no sign-in of its own/);
+    assert.match(body, /X-Auth-Email/);
+    assert.doesNotMatch(body, /Authentik/);
+  });
+
+  it('limits a form post to 64 KB, by the bytes read', async () => {
+    const { app } = fakeDeps({});
+    const headers = {
+      ...USER,
+      Origin: APP,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    };
+    const big = await app.request(`${APP}/settings/theme`, {
+      method: 'POST',
+      headers,
+      body: `theme=dark&pad=${'a'.repeat(70 * 1024)}`,
+    });
+    assert.equal(big.status, 413);
+    const chunk = new TextEncoder().encode('a'.repeat(1024));
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent += chunk.length;
+        if (sent > 1024 * 1024) controller.close();
+        else controller.enqueue(chunk);
+      },
+    });
+    const streamed = await app.request(`${APP}/settings/theme`, {
+      method: 'POST',
+      headers,
+      body: stream,
+      duplex: 'half',
+    } as RequestInit);
+    assert.equal(streamed.status, 413);
+    assert.ok(sent < 1024 * 1024, `read ${sent} bytes`);
+    const small = await post(app, '/settings/theme', { theme: 'dark' }, APP);
+    assert.equal(small.status, 303);
   });
 
   it('never serves the UI under /mcp', async () => {

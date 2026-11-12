@@ -28,20 +28,33 @@ function oauthError(
   return c.json({ error: code, error_description: description }, status ?? STATUS[code] ?? 400);
 }
 
-/** The ingress sets X-Forwarded-For. Without it, everyone shares one bucket. */
+/** The reverse proxy sets X-Forwarded-For. Without it, everyone shares one bucket. */
 const clientIp = (c: Context) =>
   c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
 
 async function readBody(c: Context): Promise<string | null> {
-  const length = Number(c.req.header('content-length') ?? 0);
-  if (length > MAX_BODY_BYTES) return null;
-  const text = await c.req.text();
-  return text.length > MAX_BODY_BYTES ? null : text;
+  if (Number(c.req.header('content-length') ?? 0) > MAX_BODY_BYTES) return null;
+  const reader = c.req.raw.body?.getReader();
+  if (!reader) return '';
+  // Count the bytes actually read: a chunked body has no Content-Length to trust.
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 /**
  * Mounted at / on the app host, before the UI, for the paths in PUBLIC_OAUTH_PATHS. Nothing here
- * reads X-authentik-* headers: forward auth is off on these paths, so a client can send any.
+ * reads the identity headers: the sign-in is off on these paths, so a client can send any.
  * The authorization endpoint itself (/oauth/authorize) is in ui/, behind forward auth.
  */
 export function createOAuthRoutes(deps: OAuthDeps): Hono {

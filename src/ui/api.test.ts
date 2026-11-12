@@ -21,6 +21,8 @@ function setup(t: TestContext) {
     contentOrigin: 'https://content.test',
     signingSecret: 'x'.repeat(32),
     devUser: null,
+    authEmailHeader: 'X-authentik-email',
+    authNameHeader: 'X-authentik-name',
   };
   const core = createCore(config);
   t.after(() => {
@@ -135,6 +137,9 @@ test('writes need the app Origin, and errors are JSON', async (t) => {
     assert.equal(res.status, 400, `${method} ${path}`);
     assert.equal((await res.json()).error, 'invalid_input');
   }
+  // The UI's 64 KB form limit must not shrink this one.
+  const medium = await request('PUT', data(id, 'a'), { data: { s: 'x'.repeat(100 * 1024) } });
+  assert.equal(medium.status, 200);
   const big = await request('PUT', data(id, 'a'), { data: { s: 'x'.repeat(300 * 1024) } });
   assert.equal(big.status, 413);
   assert.equal((await big.json()).error, 'too_large');

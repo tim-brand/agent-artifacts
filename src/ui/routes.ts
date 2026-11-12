@@ -1,4 +1,5 @@
 import { type Context, Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { getCookie, setCookie } from 'hono/cookie';
 import {
   AppError,
@@ -82,8 +83,9 @@ const TAB_FILTERS: Record<LibraryTab, LibraryFilter> = {
 };
 
 /**
- * The web UI, mounted at / on the app host behind Authentik forward auth. The signed-in user comes
- * from X-authentik-email (or DEV_USER locally). Every POST must come from the app origin.
+ * The web UI, mounted at / on the app host behind a sign-in proxy (forward auth). The signed-in
+ * user comes from the AUTH_EMAIL_HEADER request header (or DEV_USER locally). Every POST must come
+ * from the app origin.
  */
 export function createUiRoutes(deps: Deps): Hono {
   const { config, artifacts, comments, tokens, oauth, shareLinks, signer } = deps;
@@ -128,7 +130,7 @@ export function createUiRoutes(deps: Deps): Hono {
     const user = c.get('user');
     return {
       user,
-      name: c.req.header('x-authentik-name') || user,
+      name: c.req.header(config.authNameHeader) || user,
       theme: theme(c),
       summary: await artifacts.summary(),
       path: extra.path ?? `${url.pathname}${url.search}`,
@@ -139,8 +141,8 @@ export function createUiRoutes(deps: Deps): Hono {
   };
 
   ui.use('*', async (c, next) => {
-    // Forward auth is skipped on /mcp and the public OAuth paths, so their X-authentik-* headers can
-    // be forged: never trust them there. This only runs when those routes did not answer.
+    // The proxy's sign-in is skipped on /mcp and the public OAuth paths, so identity headers there
+    // can be forged: never trust them. This only runs when those routes did not answer.
     if (isPublicPath(c.req.path)) return c.text('Not Found', 404);
     await next();
     if (!c.res.headers.has('Content-Security-Policy')) c.header('Content-Security-Policy', csp);
@@ -151,8 +153,15 @@ export function createUiRoutes(deps: Deps): Hono {
   });
 
   ui.use('*', async (c, next) => {
-    const user = c.req.header('x-authentik-email') || config.devUser;
-    if (!user) return message(c, 401, 'Not signed in', 'Sign in through Authentik first.');
+    const user = c.req.header(config.authEmailHeader) || config.devUser;
+    if (!user) {
+      return message(
+        c,
+        401,
+        'Not signed in',
+        `This app has no sign-in of its own. A sign-in proxy in front of it must send the signed-in user's email in the ${config.authEmailHeader} request header, and that header is missing.`,
+      );
+    }
     c.set('user', user);
     await next();
   });
@@ -164,6 +173,13 @@ export function createUiRoutes(deps: Deps): Hono {
     }
     await next();
   });
+
+  // Form posts are small (the largest field is a 2,000 character comment). /api has its own limit.
+  const formLimit = bodyLimit({
+    maxSize: 64 * 1024,
+    onError: (c) => c.text('The request body is too large', 413),
+  });
+  ui.use('*', (c, next) => (c.req.path.startsWith('/api/') ? next() : formLimit(c, next)));
 
   // The URLs of app.js and app.css carry a hash of their content; the fonts never change.
   ui.get('/static/*', (c) => {
@@ -258,7 +274,7 @@ export function createUiRoutes(deps: Deps): Hono {
     return c.html(
       artifactPage({
         user,
-        name: c.req.header('x-authentik-name') || user,
+        name: c.req.header(config.authNameHeader) || user,
         theme: theme(c),
         artifact,
         version,
@@ -267,7 +283,7 @@ export function createUiRoutes(deps: Deps): Hono {
         url: (path) => signer.url(artifact.id, version.version, path),
         // Rendered into the page only for an artifact that declares the viewer capability.
         viewer: artifact.capabilities.viewer
-          ? { email: user, name: c.req.header('x-authentik-name') ?? '' }
+          ? { email: user, name: c.req.header(config.authNameHeader) ?? '' }
           : null,
         shareLinks: links,
         createdLink: extra.created,
@@ -308,7 +324,7 @@ export function createUiRoutes(deps: Deps): Hono {
     return c.html(
       comparePage({
         user,
-        name: c.req.header('x-authentik-name') || user,
+        name: c.req.header(config.authNameHeader) || user,
         theme: theme(c),
         comparison,
         versions,
@@ -483,7 +499,7 @@ export function createUiRoutes(deps: Deps): Hono {
     return c.redirect('/settings/connections', 303);
   });
 
-  // ---- OAuth authorization endpoint (behind forward auth, so the sign-in is Authentik's) ----
+  // ---- OAuth authorization endpoint (behind the sign-in proxy) ----
 
   /** The answer to the client: a redirect to its redirect_uri with the code or the error, and iss. */
   const answer = (redirectUri: string, params: Record<string, string | null>) => {
@@ -520,7 +536,7 @@ export function createUiRoutes(deps: Deps): Hono {
         consentPage({
           theme: theme(c),
           user,
-          name: c.req.header('x-authentik-name') || user,
+          name: c.req.header(config.authNameHeader) || user,
           request,
           params,
         }),

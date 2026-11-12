@@ -19,6 +19,8 @@ function setup(t: TestContext) {
     contentOrigin: CONTENT,
     signingSecret: 'x'.repeat(32),
     devUser: null,
+    authEmailHeader: 'X-authentik-email',
+    authNameHeader: 'X-authentik-name',
   };
   const core = createCore(config);
   t.after(() => {
