@@ -1,0 +1,63 @@
+# Agent Artifacts behind Caddy with basic auth. See README.md in this folder.
+# Copy .env.example to .env and fill it in first.
+
+name: agent-artifacts
+
+services:
+  app:
+    # Build the image from this repository (the folder two levels up).
+    build: ../..
+    # Or use a published image instead. Only if that image exists; check before you rely on it:
+    # image: ghcr.io/tim-brand/agent-artifacts:latest
+    restart: unless-stopped
+    environment:
+      APP_ORIGIN: ${APP_ORIGIN:?set APP_ORIGIN in .env}
+      CONTENT_ORIGIN: ${CONTENT_ORIGIN:?set CONTENT_ORIGIN in .env}
+      SIGNING_SECRET: ${SIGNING_SECRET:?set SIGNING_SECRET in .env}
+      # The headers Caddy sets (see Caddyfile). The app trusts them, so only Caddy may reach it.
+      AUTH_EMAIL_HEADER: X-Auth-Email
+      AUTH_NAME_HEADER: X-Auth-Name
+    volumes:
+      - app-data:/data
+    # No `ports:` on purpose. Only Caddy can reach the app, on the compose network.
+    healthcheck:
+      # The image has Node but not curl or wget.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      # The local trial: http://localhost:8080. For real domains with HTTPS, replace this line
+      # with the three below. See README.md.
+      - "8080:8080"
+      # - "80:80"
+      # - "443:443"
+      # - "443:443/udp"
+    environment:
+      APP_ORIGIN: ${APP_ORIGIN}
+      CONTENT_ORIGIN: ${CONTENT_ORIGIN}
+      AUTH_USER: ${AUTH_USER:?set AUTH_USER in .env}
+      AUTH_HASH: ${AUTH_HASH:?set AUTH_HASH in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  # The SQLite database and the artifact files. Back this up. One app replica only.
+  app-data:
+  # Caddy's certificates. Keep it, or Caddy asks for new ones on every start.
+  caddy-data:
+  caddy-config:
