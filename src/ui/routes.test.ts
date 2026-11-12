@@ -13,6 +13,8 @@ import {
   type Deps,
   type LibraryFilter,
   type LibraryQuery,
+  type OAuthGrant,
+  type OAuthService,
   type PublishInput,
   type SearchQuery,
   type ShareLink,
@@ -165,6 +167,7 @@ function fakeDeps(overrides: {
   config?: Partial<Config>;
   artifacts?: Partial<ArtifactService>;
   comments?: Partial<CommentService>;
+  oauth?: Partial<OAuthService>;
 }) {
   const list: Artifact[] = [
     artifact('a1', 'html', '<script>alert(1)</script>', 3),
@@ -373,7 +376,28 @@ function fakeDeps(overrides: {
     ...overrides.config,
   };
   const data = {} as Deps['data'];
-  const deps: Deps = { config, artifacts, comments, data, tokens, shareLinks, signer };
+  const grants: OAuthGrant[] = [
+    {
+      id: 'g1',
+      clientId: 'c1',
+      clientName: 'Claude <Code>',
+      user: 'owner@example.com',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastUsedAt: null,
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    },
+  ];
+  const revokedGrants: string[] = [];
+  const oauth = {
+    listGrants: async () => grants.filter((g) => !revokedGrants.includes(g.id)),
+    revokeGrant: async (id: string) => {
+      if (!grants.some((g) => g.id === id) || revokedGrants.includes(id)) return false;
+      revokedGrants.push(id);
+      return true;
+    },
+    ...overrides.oauth,
+  } as Deps['oauth'];
+  const deps: Deps = { config, artifacts, comments, data, tokens, oauth, shareLinks, signer };
   return {
     app: createUiRoutes(deps),
     deleted,
@@ -389,6 +413,7 @@ function fakeDeps(overrides: {
     added,
     resolved,
     answered,
+    revokedGrants,
   };
 }
 
@@ -455,7 +480,7 @@ describe('auth', () => {
 describe('static files and CSP', () => {
   it('allows only scripts, styles and fonts from self, with no inline style at all', async () => {
     const { app } = fakeDeps({});
-    for (const path of ['/', '/a/a1', '/trash', '/settings/tokens', '/connect', '/nowhere']) {
+    for (const path of ['/', '/a/a1', '/trash', '/settings/connections', '/connect', '/nowhere']) {
       const res = await get(app, path);
       const csp = res.headers.get('content-security-policy') ?? '';
       assert.match(csp, /style-src 'self'; font-src 'self'; script-src 'self';/);
@@ -706,7 +731,14 @@ describe('library', () => {
 describe('search', () => {
   it('has a search box on every app page that "/" focuses', async () => {
     const { app, searched } = fakeDeps({});
-    for (const path of ['/', '/trash', '/settings/tokens', '/connect', '/docs/runtime', '/a/a1']) {
+    for (const path of [
+      '/',
+      '/trash',
+      '/settings/connections',
+      '/connect',
+      '/docs/runtime',
+      '/a/a1',
+    ]) {
       const body = await (await get(app, path)).text();
       assert.match(
         body,
@@ -941,13 +973,13 @@ describe('POST', () => {
     assert.match(body, /data-copy="new-token"/);
     assert.match(body, /shown only once/);
     assert.ok(body.includes('laptop &lt;1&gt;'));
-    // The theme form comes back to the tokens page, not to the POST.
-    assert.match(body, /<input type="hidden" name="back" value="\/settings\/tokens">/);
+    // The theme form comes back to the Connections page, not to the POST.
+    assert.match(body, /<input type="hidden" name="back" value="\/settings\/connections">/);
 
-    const list = await (await get(app, '/settings/tokens')).text();
+    const list = await (await get(app, '/settings/connections')).text();
     assert.ok(list.includes('laptop &lt;1&gt;'));
     assert.ok(!list.includes('aa_secret1'));
-    assert.match(list, /<a class="nav on" href="\/settings\/tokens" aria-current="page">/);
+    assert.match(list, /<a class="nav on" href="\/settings\/connections" aria-current="page">/);
   });
 
   it('refuses a token without a name', async () => {
@@ -960,8 +992,56 @@ describe('POST', () => {
     await post(app, '/settings/tokens', { name: 'x' }, APP);
     const res = await post(app, '/settings/tokens/t1/revoke', {}, APP);
     assert.equal(res.status, 303);
-    assert.equal(res.headers.get('location'), '/settings/tokens');
+    assert.equal(res.headers.get('location'), '/settings/connections');
     assert.equal((await post(app, '/settings/tokens/nope/revoke', {}, APP)).status, 404);
+  });
+});
+
+describe('connections', () => {
+  it('lists signed-in apps above the tokens, escaped', async () => {
+    const { app } = fakeDeps({});
+    const body = await (await get(app, '/settings/connections')).text();
+    assert.match(body, /<h1>Connections<\/h1>/);
+    assert.ok(body.includes('Claude &lt;Code&gt;'));
+    assert.ok(!body.includes('Claude <Code>'));
+    assert.ok(body.indexOf('Signed-in apps') < body.indexOf('Personal access tokens'));
+    assert.match(body, /action="\/settings\/connections\/g1\/revoke"/);
+  });
+
+  it('the old Tokens URL redirects', async () => {
+    const { app } = fakeDeps({});
+    const res = await get(app, '/settings/tokens');
+    assert.equal(res.status, 301);
+    assert.equal(res.headers.get('location'), '/settings/connections');
+  });
+
+  it('revokes a grant only with the app Origin', async () => {
+    const { app, revokedGrants } = fakeDeps({});
+    assert.equal((await post(app, '/settings/connections/g1/revoke', {})).status, 403);
+    assert.deepEqual(revokedGrants, []);
+    const res = await post(app, '/settings/connections/g1/revoke', {}, APP);
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), '/settings/connections');
+    assert.deepEqual(revokedGrants, ['g1']);
+    assert.equal((await post(app, '/settings/connections/g1/revoke', {}, APP)).status, 404);
+    const body = await (await get(app, '/settings/connections')).text();
+    assert.match(body, /No apps signed in/);
+  });
+
+  it('never serves the public OAuth paths, whatever X-authentik says', async () => {
+    const { app } = fakeDeps({});
+    for (const path of [
+      '/.well-known/oauth-protected-resource',
+      '/.well-known/oauth-protected-resource/mcp',
+      '/.well-known/oauth-authorization-server',
+      '/.well-known/oauth-authorization-server/mcp',
+      '/oauth/register',
+      '/oauth/token',
+    ]) {
+      const res = await get(app, path);
+      assert.equal(res.status, 404, path);
+      assert.doesNotMatch(await res.text(), /owner@example\.com/);
+    }
   });
 });
 
@@ -1221,10 +1301,16 @@ describe('connect', () => {
     const body = await (await get(app, '/connect')).text();
     assert.ok(body.includes('https://app.test/mcp'));
     assert.ok(
-      body.includes('claude mcp add --transport http -s user agent-artifacts https://app.test/mcp'),
+      body.includes(
+        '<code id="claude">claude mcp add --transport http -s user agent-artifacts https://app.test/mcp</code>',
+      ),
     );
-    assert.ok(body.includes('{file:~/.agent-artifacts-token}'));
-    assert.match(body, /href="\/settings\/tokens"/);
+    assert.ok(body.includes('opencode mcp auth agent-artifacts'));
+    assert.ok(body.includes('codex mcp login agent-artifacts'));
+    // Tokens are the fallback, after the OAuth snippets.
+    assert.ok(body.indexOf('Bearer &lt;TOKEN&gt;') > body.indexOf('codex mcp login'));
+    assert.ok(body.includes('{env:AGENT_ARTIFACTS_TOKEN}'));
+    assert.match(body, /href="\/settings\/connections"/);
     assert.match(body, /<a class="nav on" href="\/connect" aria-current="page">/);
   });
 });

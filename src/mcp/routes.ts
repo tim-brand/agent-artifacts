@@ -13,18 +13,21 @@ import {
   DATA_LIMITS,
   type Deps,
   LIMITS,
+  type OAuthService,
   type ShareLink,
   type ShareLinkService,
   type Version,
 } from '../contracts.ts';
+import { mcpResource, resourceMetadataUrl } from '../oauth/rules.ts';
 
 /**
  * Read only: no MCP path can create or revoke a public link. And none can answer an ask: that is
- * the owner's decision, made in the web UI.
+ * the owner's decision, made in the web UI. OAuth: only checking a token.
  */
-type McpDeps = Omit<Deps, 'shareLinks' | 'comments'> & {
+type McpDeps = Omit<Deps, 'shareLinks' | 'comments' | 'oauth'> & {
   shareLinks: Pick<ShareLinkService, 'list'>;
   comments: Omit<CommentService, 'answer'>;
+  oauth: Pick<OAuthService, 'verifyAccess'>;
 };
 
 const MB = 1024 * 1024;
@@ -600,17 +603,30 @@ function bearer(header: string | undefined): string | null {
 
 /**
  * MCP over Streamable HTTP, stateless: a fresh server and transport per request.
- * The ingress puts no forward auth in front of /mcp, so only the bearer token counts here;
+ * The ingress puts no forward auth in front of /mcp, so only the bearer token counts here: a
+ * personal access token (aa_...) or an OAuth access token issued for this endpoint.
  * X-authentik-* headers are never read.
  */
 export function createMcpRoutes(deps: McpDeps): Hono {
   const app = new Hono();
 
+  const resource = mcpResource(deps.config.appOrigin);
+  const metadata = resourceMetadataUrl(deps.config.appOrigin);
+
+  /** Who is calling: a PAT's name, or the client name of an OAuth grant. */
+  const caller = async (token: string): Promise<string | null> => {
+    if (token.startsWith('aa_')) return (await deps.tokens.verify(token))?.name ?? null;
+    return (await deps.oauth.verifyAccess(token, resource))?.clientName ?? null;
+  };
+
   app.all('/', async (c) => {
     const token = bearer(c.req.header('authorization'));
-    const info = token ? await deps.tokens.verify(token) : null;
-    if (!info) {
-      c.header('WWW-Authenticate', 'Bearer realm="agent-artifacts"');
+    const name = token ? await caller(token) : null;
+    if (!name) {
+      // RFC 9728 5.1: the client finds the authorization server from here. With a token that
+      // didn't work, RFC 6750 3.1 adds invalid_token, so the client refreshes or signs in again.
+      const error = token ? ', error="invalid_token"' : '';
+      c.header('WWW-Authenticate', `Bearer resource_metadata="${metadata}"${error}`);
       return c.json({ error: 'unauthorized', message: 'A valid bearer token is required' }, 401);
     }
 
@@ -629,7 +645,7 @@ export function createMcpRoutes(deps: McpDeps): Hono {
       );
     }
 
-    const server = createServer(deps, info.name);
+    const server = createServer(deps, name);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

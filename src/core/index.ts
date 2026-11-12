@@ -5,6 +5,7 @@ import type {
   CommentService,
   ContentSigner,
   DataService,
+  OAuthService,
   ShareLinkService,
   TokenService,
 } from '../contracts.ts';
@@ -13,6 +14,7 @@ import { createBlobStore } from './blobs.ts';
 import { createCommentService } from './comments.ts';
 import { createDataService } from './data.ts';
 import { openDb } from './db.ts';
+import { createOAuthService } from './oauth.ts';
 import { createPurge, type PurgeResult } from './purge.ts';
 import { createShareLinkService } from './share-links.ts';
 import { createSigner } from './signer.ts';
@@ -23,23 +25,33 @@ export function createCore(config: Config): {
   comments: CommentService;
   data: DataService;
   tokens: TokenService;
+  oauth: OAuthService;
   shareLinks: ShareLinkService;
   signer: ContentSigner;
-  /** Empties the trash of artifacts deleted over 30 days ago and removes unused blobs. */
+  /**
+   * Empties the trash of artifacts deleted over 30 days ago and removes unused blobs, expired OAuth
+   * codes and tokens, ended grants and clients unused for 30 days.
+   */
   purge(now?: number): Promise<PurgeResult>;
   close(): void;
 } {
   const blobsDir = join(config.dataDir, 'blobs');
   const blobs = createBlobStore(blobsDir);
   const db = openDb(config.dataDir, blobs);
+  const oauth = createOAuthService(db, config.appOrigin);
+  const purge = createPurge(db, blobsDir);
   return {
     artifacts: createArtifactService(db, blobs, config.appOrigin),
     comments: createCommentService(db),
     data: createDataService(db),
     tokens: createTokenService(db),
+    oauth,
     shareLinks: createShareLinkService(db),
     signer: createSigner(config.contentOrigin, config.signingSecret),
-    purge: createPurge(db, blobsDir),
+    purge: async (now) => {
+      oauth.purge(now);
+      return purge(now);
+    },
     close: () => db.close(),
   };
 }

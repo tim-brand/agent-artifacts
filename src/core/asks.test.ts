@@ -270,7 +270,8 @@ test('the asks migration runs on an existing database', async (t) => {
   // Back to the schema before asks, as on the deployed instance.
   ctx.withDb((db) =>
     db.exec(
-      'DROP TABLE asks; ALTER TABLE versions DROP COLUMN lines_added; ' +
+      'DROP TABLE oauth_tokens; DROP TABLE oauth_codes; DROP TABLE oauth_grants; DROP TABLE oauth_clients; ' +
+        'DROP TABLE asks; ALTER TABLE versions DROP COLUMN lines_added; ' +
         'ALTER TABLE versions DROP COLUMN lines_removed; PRAGMA user_version = 5',
     ),
   );

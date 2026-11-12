@@ -480,6 +480,139 @@ export interface TokenService {
   verify(token: string): Promise<TokenInfo | null>;
 }
 
+/** A client that registered itself (RFC 7591). Public: it has no secret. */
+export type OAuthClient = {
+  id: string;
+  name: string;
+  redirectUris: string[];
+  createdAt: string;
+};
+
+/** One sign-in of a client by the user: its tokens belong to it, and revoking it ends them. */
+export type OAuthGrant = {
+  id: string;
+  clientId: string;
+  clientName: string;
+  user: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  /** When the current refresh token runs out, unless it is used before. */
+  expiresAt: string;
+};
+
+export type OAuthTokens = {
+  accessToken: string;
+  refreshToken: string;
+  /** Seconds. */
+  expiresIn: number;
+  scope: string;
+};
+
+/** The query of GET (and the form of POST) /oauth/authorize, as received. */
+export type AuthorizeParams = Partial<
+  Record<
+    | 'response_type'
+    | 'client_id'
+    | 'redirect_uri'
+    | 'code_challenge'
+    | 'code_challenge_method'
+    | 'state'
+    | 'resource'
+    | 'scope',
+    string
+  >
+>;
+
+/** A checked authorization request. */
+export type AuthorizeRequest = {
+  client: OAuthClient;
+  /** Where to send the answer: the given redirect_uri, or the client's only one. */
+  redirectUri: string;
+  /** Whether redirect_uri was in the request; then the token request must repeat it. */
+  redirectUriGiven: boolean;
+  codeChallenge: string;
+  state: string | null;
+  resource: string;
+  scope: string;
+};
+
+/**
+ * What GET /oauth/authorize does with a request (RFC 6749 4.1.2.1): show the consent page, show an
+ * error page (the client or redirect_uri can't be trusted, so no redirect), or redirect back with
+ * the error.
+ */
+export type AuthorizeCheck =
+  | { ok: true; request: AuthorizeRequest }
+  | { ok: false; redirect: null; error: string; description: string }
+  | {
+      ok: false;
+      redirect: string;
+      state: string | null;
+      error: OAuthErrorCode;
+      description: string;
+    };
+
+export type OAuthErrorCode =
+  | 'invalid_request'
+  | 'invalid_client'
+  | 'invalid_grant'
+  | 'unauthorized_client'
+  | 'unsupported_grant_type'
+  | 'unsupported_response_type'
+  | 'invalid_scope'
+  | 'invalid_target'
+  | 'access_denied'
+  | 'invalid_redirect_uri'
+  | 'invalid_client_metadata'
+  | 'temporarily_unavailable';
+
+/** An OAuth error response (RFC 6749 5.2, RFC 7591 3.2.2): the routes send `{error, error_description}`. */
+export class OAuthError extends Error {
+  readonly code: OAuthErrorCode;
+  constructor(code: OAuthErrorCode, description: string) {
+    super(description);
+    this.name = 'OAuthError';
+    this.code = code;
+  }
+}
+
+/**
+ * The app's own OAuth 2.1 authorization server for MCP clients. Codes, access and refresh tokens
+ * are stored only as SHA-256 hashes; the plain values are returned once.
+ */
+export interface OAuthService {
+  /** Dynamic client registration. Throws OAuthError invalid_redirect_uri / invalid_client_metadata. */
+  register(input: { clientName?: unknown; redirectUris: unknown }): Promise<OAuthClient>;
+  getClient(id: string): Promise<OAuthClient | null>;
+  /** Checks an authorization request: client, redirect_uri, response_type, PKCE S256, resource. */
+  checkAuthorize(params: AuthorizeParams): Promise<AuthorizeCheck>;
+  /** After the user allowed it: a single-use code, valid for 60 seconds. */
+  createCode(request: AuthorizeRequest, user: string): Promise<string>;
+  /** authorization_code grant. Throws OAuthError. A reused code revokes the grant it made. */
+  exchangeCode(input: {
+    code: string;
+    clientId: string;
+    redirectUri?: string;
+    codeVerifier?: string;
+    resource?: string;
+  }): Promise<OAuthTokens>;
+  /** refresh_token grant: rotates the refresh token. Reusing a rotated one revokes the grant. */
+  refresh(input: {
+    refreshToken: string;
+    clientId: string;
+    resource?: string;
+  }): Promise<OAuthTokens>;
+  /** Constant-time; the token must be live, its grant too, and issued for `resource`. */
+  verifyAccess(
+    token: string,
+    resource: string,
+  ): Promise<{ grantId: string; clientName: string; user: string } | null>;
+  /** Live grants, newest first. */
+  listGrants(): Promise<OAuthGrant[]>;
+  /** Revokes the grant and all its tokens. */
+  revokeGrant(id: string): Promise<boolean>;
+}
+
 export type ShareLink = {
   id: string;
   artifactId: string;
@@ -570,6 +703,7 @@ export type Deps = {
   comments: CommentService;
   data: DataService;
   tokens: TokenService;
+  oauth: OAuthService;
   shareLinks: ShareLinkService;
   signer: ContentSigner;
 };

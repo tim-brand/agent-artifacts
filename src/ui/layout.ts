@@ -35,8 +35,11 @@ const APP_CSS_URL = asset('app.css');
 const ICON_URL = asset('icon.svg');
 const FONT_URL = '/static/fonts/Geist-Variable.woff2';
 
-/** No inline script or style at all: everything comes from 'self'. */
-export function contentSecurityPolicy(contentOrigin: string): string {
+/**
+ * No inline script or style at all: everything comes from 'self'. `formTargets` widens form-action
+ * for the consent page, whose form redirects to the OAuth client (browsers check redirects too).
+ */
+export function contentSecurityPolicy(contentOrigin: string, formTargets: string[] = []): string {
   return [
     "default-src 'self'",
     `frame-src ${contentOrigin}`,
@@ -44,7 +47,7 @@ export function contentSecurityPolicy(contentOrigin: string): string {
     "style-src 'self'",
     "font-src 'self'",
     "script-src 'self'",
-    "form-action 'self'",
+    ["form-action 'self'", ...formTargets].join(' '),
     "frame-ancestors 'none'",
     "base-uri 'none'",
     "object-src 'none'",
@@ -55,7 +58,7 @@ export function contentSecurityPolicy(contentOrigin: string): string {
 export type Theme = 'light' | 'dark' | 'system';
 export const THEMES: readonly Theme[] = ['light', 'dark', 'system'];
 
-export type Nav = 'library' | 'asks' | 'trash' | 'tokens' | 'connect' | 'docs' | null;
+export type Nav = 'library' | 'asks' | 'trash' | 'connections' | 'connect' | 'docs' | null;
 
 /** What every page of the app shell needs. */
 export type Shell = {
@@ -218,7 +221,7 @@ ${nav('/?tab=asks', 'Asks for you', 'ask', shell.nav === 'asks', summary.openAsk
 ${nav('/trash', 'Trash', 'trash', shell.nav === 'trash', summary.trash)}
 ${agents.length ? html`<div class="group">Agents</div>${agents}` : ''}
 <div class="group">Settings</div>
-${nav('/settings/tokens', 'Tokens', 'key', shell.nav === 'tokens')}
+${nav('/settings/connections', 'Connections', 'key', shell.nav === 'connections')}
 ${nav('/connect', 'Connect an agent', 'plug', shell.nav === 'connect')}
 ${nav('/docs/runtime', 'Live pages docs', 'book', shell.nav === 'docs')}
 </nav>
