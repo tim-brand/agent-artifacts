@@ -40,7 +40,63 @@ export type Version = {
   createdAt: string;
   /** Who published it: the token's name, or the signed-in user's email. */
   publishedBy: string;
+  /**
+   * Lines added and removed in the entry file against the previous version's entry (v1: against
+   * nothing). Null when the entry isn't text (html, markdown, code or SVG), or was too slow to diff.
+   */
+  linesAdded: number | null;
+  linesRemoved: number | null;
 };
+
+/** One hunk of a unified diff. Each line starts with ' ', '-', '+', or '\' (no newline at end). */
+export type DiffHunk = {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+};
+
+/** A file that differs between two versions. */
+export type FileChange = {
+  path: string;
+  /** Renamed: the entry file's path in the older version, when the newer one has another entry. */
+  oldPath?: string;
+  status: 'added' | 'removed' | 'changed' | 'renamed';
+  /** 'text': `hunks` hold the diff. 'binary': not UTF-8 text, not diffed. 'too_large': too slow to diff. */
+  diff: 'text' | 'binary' | 'too_large';
+  /** Null unless `diff` is 'text'. */
+  linesAdded: number | null;
+  linesRemoved: number | null;
+  /** Three lines of context. Empty for binary files. */
+  hunks: DiffHunk[];
+  /** Some or all of the hunks were left out to keep the comparison under COMPARE_LIMITS.diffBytes. */
+  truncated: boolean;
+};
+
+export type Comparison = {
+  artifact: Artifact;
+  from: Version;
+  to: Version;
+  /** Files whose bytes differ: the entry first, then by path. */
+  files: FileChange[];
+  /** Files in both versions with the same bytes. */
+  unchanged: number;
+  /** Sums over the text files. */
+  linesAdded: number;
+  linesRemoved: number;
+  /** The text changes as one unified diff (`--- a/path`, `+++ b/path`), at most diffBytes. */
+  patch: string;
+  /** Hunks were left out of `files` and `patch` to stay under COMPARE_LIMITS.diffBytes. */
+  truncated: boolean;
+};
+
+export const COMPARE_LIMITS = {
+  /** Bytes of the unified diff of one comparison. */
+  diffBytes: 200 * 1024,
+  /** Lines of context around each change. */
+  context: 3,
+} as const;
 
 export type DeletedArtifact = Artifact & { deletedAt: string };
 
@@ -191,6 +247,11 @@ export interface ArtifactService {
    * `publishedBy` gets " (restored v<n>)" appended. not_found when the artifact or version doesn't exist.
    */
   restoreVersion(id: string, version: number, publishedBy: string): Promise<PublishResult>;
+  /**
+   * What changed from version `from` to version `to` (either order). Null when the artifact or
+   * either version doesn't exist (or is deleted).
+   */
+  compare(id: string, from: number, to: number): Promise<Comparison | null>;
 }
 
 /**

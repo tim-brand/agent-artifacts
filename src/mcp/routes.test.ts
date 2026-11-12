@@ -10,6 +10,7 @@ import {
   type CommentService,
   type DataService,
   type Deps,
+  type FileChange,
   type PublishInput,
   type SearchQuery,
   type ShareLink,
@@ -46,6 +47,8 @@ const version: Version = {
   files: [{ path: 'README.md', size: 7, contentType: 'text/markdown', sha256: 'x' }],
   createdAt: '2026-01-02T00:00:00Z',
   publishedBy: 'claude-laptop',
+  linesAdded: 1,
+  linesRemoved: 0,
 };
 
 const pinnedLink: ShareLink = {
@@ -63,6 +66,16 @@ const expiredLink: ShareLink = {
   version: null,
   label: '',
   expiresAt: '2026-01-04T00:00:00Z',
+};
+
+const comparedFile: FileChange = {
+  path: 'README.md',
+  status: 'changed',
+  diff: 'text',
+  linesAdded: 1,
+  linesRemoved: 1,
+  hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-# Hello', '+# Bye'] }],
+  truncated: false,
 };
 
 const thread: Thread = {
@@ -120,6 +133,7 @@ function setup(
   const published: { input: PublishInput; publishedBy: string }[] = [];
   const searched: SearchQuery[] = [];
   const restored: { id: string; version: number; publishedBy: string }[] = [];
+  const compared: [string, number, number][] = [];
   const artifacts: ArtifactService = {
     async publish(input, publishedBy) {
       published.push({ input, publishedBy });
@@ -157,6 +171,21 @@ function setup(
       restored.push({ id, version: n, publishedBy });
       if (id !== 'art1') throw new AppError('not_found', 'gone', { id, version: n });
       return { id, version: 3, title: 'Hello', url: 'https://app.test/a/art1' };
+    },
+    async compare(id, from, to) {
+      compared.push([id, from, to]);
+      if (id !== 'art1' || from > 2 || to > 2) return null;
+      return {
+        artifact,
+        from: { ...version, version: from },
+        to: { ...version, version: to },
+        files: [comparedFile],
+        unchanged: 1,
+        linesAdded: 1,
+        linesRemoved: 1,
+        patch: '--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-# Hello\n+# Bye\n',
+        truncated: false,
+      };
     },
     ...overrides,
   };
@@ -215,7 +244,18 @@ function setup(
   };
   const app = new Hono();
   app.route('/mcp', createMcpRoutes(deps));
-  return { app, published, searched, restored, shareCalls, added, resolved, answered, dataCalls };
+  return {
+    app,
+    published,
+    searched,
+    restored,
+    compared,
+    shareCalls,
+    added,
+    resolved,
+    answered,
+    dataCalls,
+  };
 }
 
 let nextId = 1;
@@ -295,6 +335,7 @@ test('initialize and tools/list', async () => {
     'artifact_data_query',
     'artifact_data_set',
     'artifact_data_update',
+    'compare_versions',
     'delete_artifact',
     'get_artifact',
     'list_artifacts',
@@ -460,6 +501,42 @@ test('restore_version and undelete_artifact', async () => {
   assert.deepEqual(undeleted.json, { undeleted: true, url: 'https://app.test/a/art1' });
   const notInTrash = await callTool(app, 'undelete_artifact', { id: 'nope' });
   assert.equal(notInTrash.json.error, 'not_found');
+});
+
+test('compare_versions returns the file changes and the patch, with defaults', async () => {
+  const { app, compared } = setup();
+  const { result, json } = await callTool(app, 'compare_versions', { id: 'art1', from: 1, to: 2 });
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(json.files, [
+    {
+      path: 'README.md',
+      status: 'changed',
+      diff: 'text',
+      linesAdded: 1,
+      linesRemoved: 1,
+      truncated: false,
+    },
+  ]);
+  assert.equal(json.patch, '--- a/README.md\n+++ b/README.md\n@@ -1,1 +1,1 @@\n-# Hello\n+# Bye\n');
+  assert.deepEqual([json.from.version, json.to.version], [1, 2]);
+  assert.equal(json.from.publishedBy, 'claude-laptop');
+  assert.deepEqual([json.unchanged, json.linesAdded, json.linesRemoved], [1, 1, 1]);
+  assert.equal(json.truncated, false);
+  assert.equal(json.url, 'https://app.test/a/art1/compare?from=1&to=2');
+  assert.equal(result.structuredContent.patch, json.patch);
+
+  // Without from and to: the latest (2) against the one before it.
+  await callTool(app, 'compare_versions', { id: 'art1' });
+  await callTool(app, 'compare_versions', { id: 'art1', to: 1 });
+  assert.deepEqual(compared.slice(1), [
+    ['art1', 1, 2],
+    ['art1', 1, 1],
+  ]);
+
+  const missing = await callTool(app, 'compare_versions', { id: 'nope' });
+  assert.equal(missing.json.error, 'not_found');
+  const noVersion = await callTool(app, 'compare_versions', { id: 'art1', from: 1, to: 9 });
+  assert.equal(noVersion.json.error, 'not_found');
 });
 
 test('list_share_links lists links read-only, and no tool can create or revoke one', async () => {

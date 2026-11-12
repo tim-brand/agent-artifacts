@@ -229,7 +229,8 @@ test('the comments migration runs on an existing database', async (t) => {
   ctx.withDb((db) => {
     db.exec(
       'DROP TABLE asks; DROP TABLE comments; DROP TABLE threads; ' +
-        'DROP TABLE artifact_data; ALTER TABLE artifacts DROP COLUMN capabilities; ALTER TABLE artifacts DROP COLUMN data_rev; ALTER TABLE artifacts DROP COLUMN data_floor; PRAGMA user_version = 3',
+        'DROP TABLE artifact_data; ALTER TABLE artifacts DROP COLUMN capabilities; ALTER TABLE artifacts DROP COLUMN data_rev; ALTER TABLE artifacts DROP COLUMN data_floor; ' +
+        'ALTER TABLE versions DROP COLUMN lines_added; ALTER TABLE versions DROP COLUMN lines_removed; PRAGMA user_version = 3',
     );
   });
   const thread = await ctx.comments.add({ artifactId: id, body: 'after the upgrade' }, OWNER);

@@ -8,6 +8,7 @@ import {
   type CommentAuthor,
   type CommentInput,
   type CommentService,
+  type Comparison,
   type ContentSigner,
   type Deps,
   type LibraryFilter,
@@ -53,6 +54,8 @@ function version(a: Artifact, n: number, entry: string): Version {
     ],
     createdAt: '2026-01-02T00:00:00.000Z',
     publishedBy: `agent-${n}`,
+    linesAdded: n === 1 ? 12 : n,
+    linesRemoved: n === 1 ? 0 : 1,
   };
 }
 
@@ -104,6 +107,60 @@ const THREADS: Thread[] = [
   },
 ];
 
+const COMPARISON: Omit<Comparison, 'artifact' | 'from' | 'to'> = {
+  files: [
+    {
+      path: 'index.html',
+      status: 'changed',
+      diff: 'text',
+      linesAdded: 2,
+      linesRemoved: 1,
+      hunks: [
+        {
+          oldStart: 8,
+          oldLines: 4,
+          newStart: 8,
+          newLines: 5,
+          lines: [
+            ' <p>same</p>',
+            '-<script>alert("old")</script>',
+            '+<img src=x onerror=alert(1)>',
+            '+& more',
+            ' <p>after</p>',
+            ' end',
+            '\\ No newline at end of file',
+          ],
+        },
+      ],
+      truncated: false,
+    },
+    {
+      path: 'logo.png',
+      status: 'added',
+      diff: 'binary',
+      linesAdded: null,
+      linesRemoved: null,
+      hunks: [],
+      truncated: false,
+    },
+    {
+      path: 'new <b>.css',
+      oldPath: 'old.css',
+      status: 'renamed',
+      diff: 'text',
+      linesAdded: 0,
+      linesRemoved: 0,
+      hunks: [],
+      truncated: true,
+    },
+  ],
+  unchanged: 1,
+  linesAdded: 2,
+  linesRemoved: 1,
+  patch: 'unused by the UI',
+  truncated: true,
+};
+
 function fakeDeps(overrides: {
   config?: Partial<Config>;
   artifacts?: Partial<ArtifactService>;
@@ -123,6 +180,7 @@ function fakeDeps(overrides: {
     ({ pdf: 'document.pdf', image: 'chart.svg' })[a.format as string] ?? 'index.html';
   const undeleted: string[] = [];
   const restored: { id: string; version: number; publishedBy: string }[] = [];
+  const compared: [string, number, number][] = [];
   const artifacts: ArtifactService = {
     publish: async (input, by) => {
       published.push({ input, by });
@@ -210,6 +268,17 @@ function fakeDeps(overrides: {
       const a = list.find((x) => x.id === id);
       if (!a || n > a.latestVersion) throw new AppError('not_found', 'gone');
       return { id, version: a.latestVersion + 1, title: a.title, url: `${APP}/a/${id}` };
+    },
+    compare: async (id, from, to) => {
+      compared.push([id, from, to]);
+      const a = list.find((x) => x.id === id);
+      if (!a || from > a.latestVersion || to > a.latestVersion) return null;
+      return {
+        artifact: a,
+        from: version(a, from, entryOf(a)),
+        to: version(a, to, entryOf(a)),
+        ...COMPARISON,
+      };
     },
     ...overrides.artifacts,
   };
@@ -314,6 +383,7 @@ function fakeDeps(overrides: {
     published,
     undeleted,
     restored,
+    compared,
     shared,
     links,
     added,
@@ -966,6 +1036,154 @@ describe('restore a version', () => {
     assert.equal((await post(app, '/a/a1/v/2/restore', {})).status, 403);
     assert.equal((await post(app, '/a/a1/v/2/restore', {}, CONTENT)).status, 403);
     assert.deepEqual(restored, []);
+  });
+});
+
+describe('compare versions', () => {
+  it('shows line counts in the Versions panel, linked to the changes', async () => {
+    const { app } = fakeDeps({});
+    const body = await (await get(app, '/a/a1/v/2?panel=versions')).text();
+    assert.match(
+      body,
+      /<a class="delta" href="\/a\/a1\/compare\?from=2&amp;to=3" title="3 lines added, 1 removed"><span class="add">\+3<\/span><span class="del">−1<\/span><\/a>/,
+    );
+    // v1 has nothing before it to compare with.
+    assert.match(body, /<span class="delta" title="12 lines added, 0 removed">/);
+    // The pane's Compare: the version on screen against the one before it.
+    assert.match(
+      body,
+      /<div class="phead"><span>3 versions<\/span><a class="btn sm" href="\/a\/a1\/compare\?from=1&amp;to=2">/,
+    );
+    // Each other version compares with the one on screen, older first.
+    assert.match(body, /href="\/a\/a1\/compare\?from=2&amp;to=3" title="Compare v2 with v3">/);
+    assert.match(body, /href="\/a\/a1\/compare\?from=1&amp;to=2" title="Compare v1 with v2">/);
+  });
+
+  it('has no Compare for an artifact with one version', async () => {
+    const { app } = fakeDeps({});
+    const body = await (await get(app, '/a/p1')).text();
+    assert.doesNotMatch(body, /\/compare/);
+  });
+
+  it('renders the changes escaped, with line numbers, gaps and file statuses', async () => {
+    const { app, compared } = fakeDeps({});
+    const res = await get(app, '/a/a1/compare?from=1&to=3');
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.deepEqual(compared, [['a1', 1, 3]]);
+    assert.doesNotMatch(body, /<script>alert|<img src=x|<b>\.css/);
+    assert.match(
+      body,
+      /<tr class="gap"><td class="ln" colspan="2">⋯<\/td><td class="code">7 unchanged lines<\/td><\/tr>/,
+    );
+    assert.match(
+      body,
+      /<tr><td class="ln">8<\/td><td class="ln">8<\/td><td class="code">&lt;p&gt;same&lt;\/p&gt;<\/td><\/tr>/,
+    );
+    assert.match(
+      body,
+      /<tr class="del"><td class="ln">9<\/td><td class="ln"><\/td><td class="code">&lt;script&gt;alert\(&quot;old&quot;\)&lt;\/script&gt;<\/td><\/tr>/,
+    );
+    assert.match(
+      body,
+      /<tr class="add"><td class="ln"><\/td><td class="ln">9<\/td><td class="code">&lt;img src=x onerror=alert\(1\)&gt;<\/td><\/tr>/,
+    );
+    assert.match(body, /<td class="ln">10<\/td><td class="code">&amp; more<\/td>/);
+    assert.match(body, /<td class="ln">11<\/td><td class="ln">12<\/td><td class="code">end<\/td>/);
+    assert.match(body, /<tr class="eof">.*No newline at end of file/);
+    // The file list, and a section per file.
+    assert.match(body, /<ul class="cfiles">/);
+    assert.match(
+      body,
+      /<a href="#file-2"><span class="tag added">Added<\/span><span class="path mono">logo\.png<\/span><\/a>/,
+    );
+    assert.match(
+      body,
+      /<span class="path mono">old\.css → new &lt;b&gt;\.css<\/span><span class="tag renamed">Renamed<\/span>/,
+    );
+    assert.match(body, /Binary file: not compared\./);
+    assert.match(body, /This diff is not shown: a comparison stops at 200 KB\./);
+    assert.match(body, /<div class="notice warn">This comparison is longer than 200 KB/);
+    assert.match(body, /· 3 files changed · 1 unchanged/);
+    assert.match(
+      body,
+      /<a href="\/a\/a1\/compare\?from=1&amp;to=3" aria-current="true" class="on">Changes<\/a>/,
+    );
+    assert.match(
+      body,
+      /<a href="\/a\/a1\/compare\?from=1&amp;to=3&amp;mode=side">Side by side<\/a>/,
+    );
+    assert.match(body, /<option value="1" selected>v1 · /);
+    assert.match(body, /<select class="input vpick" name="to"[^>]*><option value="3" selected>/);
+    assert.match(
+      body,
+      /<form class="cmp-pick" method="get" action="\/a\/a1\/compare" data-autosubmit>/,
+    );
+    assert.doesNotMatch(body, /<iframe/);
+  });
+
+  it('defaults to the latest against the one before it', async () => {
+    const { app, compared } = fakeDeps({});
+    assert.equal((await get(app, '/a/a1/compare')).status, 200);
+    assert.equal((await get(app, '/a/a1/compare?to=1')).status, 200);
+    assert.equal((await get(app, '/a/a1/compare?from=3&to=')).status, 200);
+    assert.deepEqual(compared, [
+      ['a1', 2, 3],
+      ['a1', 1, 1],
+      ['a1', 3, 3],
+    ]);
+  });
+
+  it('shows both versions side by side in sandboxed frames', async () => {
+    const { app } = fakeDeps({});
+    const body = await (await get(app, '/a/a1/compare?from=1&to=2&mode=side')).text();
+    const frames = body.match(/<iframe[^>]*>/g) ?? [];
+    assert.equal(frames.length, 2);
+    for (const [i, frame] of frames.entries()) {
+      assert.match(
+        frame,
+        new RegExp(`src="https://content\\.test/s/9\\.sig/a1/${i + 1}/index\\.html"`),
+      );
+      assert.match(frame, /sandbox="allow-scripts allow-popups/);
+      assert.doesNotMatch(frame, /allow-same-origin|data-artifact/);
+    }
+    assert.match(body, /<input type="hidden" name="mode" value="side">/);
+    assert.doesNotMatch(body, /class="diff"/);
+
+    const pdf = await (await get(app, '/a/p1/compare?mode=side')).text();
+    for (const frame of pdf.match(/<iframe[^>]*>/g) ?? []) assert.doesNotMatch(frame, /sandbox/);
+  });
+
+  it('says so when nothing changed', async () => {
+    const { app } = fakeDeps({
+      artifacts: {
+        compare: async (id, from, to) => {
+          const a = artifact(id, 'markdown', 'Same');
+          return {
+            ...COMPARISON,
+            artifact: { ...a, latestVersion: 2 },
+            from: version(a, from, 'README.md'),
+            to: version(a, to, 'README.md'),
+            files: [],
+            truncated: false,
+          };
+        },
+      },
+    });
+    const body = await (await get(app, '/a/a1/compare?from=1&to=2')).text();
+    assert.match(body, /<h2>No changes<\/h2><p class="muted">v1 and v2 have the same files\.<\/p>/);
+  });
+
+  it('is not found for an unknown artifact or version, or a bad number', async () => {
+    const { app } = fakeDeps({});
+    for (const path of [
+      '/a/nope/compare',
+      '/a/a1/compare?from=1&to=9',
+      '/a/a1/compare?from=0&to=2',
+      '/a/a1/compare?from=x',
+    ]) {
+      assert.equal((await get(app, path)).status, 404, path);
+    }
   });
 });
 

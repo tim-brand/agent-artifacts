@@ -88,6 +88,12 @@
     }
   });
 
+  // Forms that go as soon as a choice changes: the compare page's version pickers.
+  document.addEventListener('change', (e) => {
+    const form = e.target.closest?.('form[data-autosubmit]');
+    if (form && e.target.matches('select')) form.requestSubmit();
+  });
+
   // Theme: light, dark or system. The server reads the cookie; the frame hears it over its port.
   const media = window.matchMedia?.('(prefers-color-scheme: dark)');
   const theme = () => root?.dataset?.theme || (media?.matches ? 'dark' : 'light');

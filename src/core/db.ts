@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Format } from '../contracts.ts';
 import type { BlobStore } from './blobs.ts';
+import { entryText, lineCounts } from './diff.ts';
 import { entryBody } from './search.ts';
 
 /** SQL, or a function for a step that needs more than SQL (such as reading blobs). */
@@ -158,6 +159,45 @@ const MIGRATIONS: Migration[] = [
     answered_at TEXT
   ) WITHOUT ROWID;
   `,
+
+  // Line counts of each version's entry file against the previous version's (v1: against nothing),
+  // backfilled for every version, deleted artifacts too. NULL when the entry isn't text, its blob
+  // can't be read, or the diff is too slow. One entry's text is held at a time.
+  (db, blobs) => {
+    db.exec(`ALTER TABLE versions ADD COLUMN lines_added INTEGER;
+      ALTER TABLE versions ADD COLUMN lines_removed INTEGER;`);
+    const rows = db
+      .prepare(
+        `SELECT v.artifact_id, v.version, v.format, f.sha256, f.content_type
+         FROM versions v
+         LEFT JOIN version_files f ON f.artifact_id = v.artifact_id AND f.version = v.version AND f.path = v.entry
+         ORDER BY v.artifact_id, v.version`,
+      )
+      .all() as {
+      artifact_id: string;
+      version: number;
+      format: Format;
+      sha256: string | null;
+      content_type: string | null;
+    }[];
+    const update = db.prepare(
+      'UPDATE versions SET lines_added = ?, lines_removed = ? WHERE artifact_id = ? AND version = ?',
+    );
+    let artifact: string | null = null;
+    let previous = '';
+    for (const row of rows) {
+      if (row.artifact_id !== artifact) previous = '';
+      artifact = row.artifact_id;
+      const file =
+        row.sha256 && row.content_type
+          ? { sha256: row.sha256, contentType: row.content_type }
+          : undefined;
+      const text = entryText(blobs, row.format, file);
+      const counts = text === null ? null : lineCounts(previous, text);
+      update.run(counts?.added ?? null, counts?.removed ?? null, row.artifact_id, row.version);
+      previous = text ?? '';
+    }
+  },
 ];
 
 export function openDb(dataDir: string, blobs: BlobStore): DatabaseSync {

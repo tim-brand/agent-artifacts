@@ -135,6 +135,8 @@ const artifacts: ArtifactService = {
       files,
       createdAt: now,
       publishedBy: 'test',
+      linesAdded: null,
+      linesRemoved: null,
     };
     return { artifact, version: v };
   },
@@ -153,6 +155,7 @@ const artifacts: ArtifactService = {
   undelete: () => Promise.reject(new Error('unused')),
   listDeleted: () => Promise.reject(new Error('unused')),
   restoreVersion: () => Promise.reject(new Error('unused')),
+  compare: () => Promise.reject(new Error('unused')),
   publish: () => Promise.reject(new Error('unused')),
 };
 

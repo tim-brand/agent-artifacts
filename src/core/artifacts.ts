@@ -14,6 +14,7 @@ import {
 } from '../contracts.ts';
 import type { BlobStore } from './blobs.ts';
 import { transaction } from './db.ts';
+import { compareFiles, entryText, type LineCounts, lineCounts } from './diff.ts';
 import { applyEdits, checkEditsInput } from './edits.ts';
 import { hasContent, prepareVersion } from './files.ts';
 import { now, randomId } from './ids.ts';
@@ -41,7 +42,10 @@ type VersionRow = {
   format: string;
   published_by: string;
   created_at: string;
+  lines_added: number | null;
+  lines_removed: number | null;
 };
+type EntryRow = { format: string; sha256: string | null; content_type: string | null };
 type FileRow = {
   version: number;
   path: string;
@@ -97,6 +101,8 @@ const toVersion = (row: VersionRow, files: FileInfo[]): Version => ({
   files,
   createdAt: row.created_at,
   publishedBy: row.published_by,
+  linesAdded: row.lines_added,
+  linesRemoved: row.lines_removed,
 });
 
 function encodeCursor(row: ArtifactRow): string {
@@ -156,8 +162,13 @@ export function createArtifactService(
        updated_at = ? WHERE id = ?`,
     ),
     insertVersion: db.prepare(
-      `INSERT INTO versions (artifact_id, version, entry, format, published_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO versions (artifact_id, version, entry, format, published_by, created_at,
+       lines_added, lines_removed) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ),
+    entryFile: db.prepare(
+      `SELECT v.format, f.sha256, f.content_type FROM versions v
+       LEFT JOIN version_files f ON f.artifact_id = v.artifact_id AND f.version = v.version AND f.path = v.entry
+       WHERE v.artifact_id = ? AND v.version = ?`,
     ),
     insertFile: db.prepare(
       `INSERT INTO version_files (artifact_id, version, path, size, content_type, sha256)
@@ -196,8 +207,36 @@ export function createArtifactService(
   const library = createLibrary(db, pageLimit);
   const findArtifact = (id: string) => stmt.artifact.get(id) as ArtifactRow | undefined;
 
+  const load = (id: string, version?: number) => {
+    const artifact = findArtifact(id);
+    if (!artifact) return null;
+    const row = stmt.version.get(id, version ?? artifact.latest_version) as VersionRow | undefined;
+    if (!row) return null;
+    const files = (stmt.files.all(id, row.version) as FileRow[]).map(toFile);
+    return { artifact: toArtifact(artifact), version: toVersion(row, files) };
+  };
+
+  const textOfEntry = (row: EntryRow | undefined) =>
+    row?.sha256 && row.content_type
+      ? entryText(blobs, row.format as Format, {
+          sha256: row.sha256,
+          contentType: row.content_type,
+        })
+      : null;
+
+  /** The entry's line counts against the entry of `previous` (0: no previous version). */
+  const countsFor = (id: string, previous: number, v: NewVersion): LineCounts | null => {
+    const entry = v.files.find((f) => f.path === v.entry);
+    const after = entryText(blobs, v.format, entry);
+    if (after === null) return null;
+    const before = previous ? textOfEntry(stmt.entryFile.get(id, previous) as EntryRow) : null;
+    return lineCounts(before ?? '', after);
+  };
+
   const insertVersion = (id: string, version: number, v: NewVersion, by: string, time: string) => {
-    stmt.insertVersion.run(id, version, v.entry, v.format, by, time);
+    const counts = countsFor(id, version - 1, v);
+    const { added = null, removed = null } = counts ?? {};
+    stmt.insertVersion.run(id, version, v.entry, v.format, by, time, added, removed);
     for (const f of v.files) {
       stmt.insertFile.run(id, version, f.path, f.size, f.contentType, f.sha256);
     }
@@ -334,6 +373,12 @@ export function createArtifactService(
         }
         const time = now();
         const next = existing.latest_version + 1;
+        const files = (stmt.files.all(id, version) as FileRow[]).map(toFile);
+        const counts = countsFor(id, existing.latest_version, {
+          entry: old.entry,
+          format: old.format as Format,
+          files,
+        });
         stmt.updateArtifact.run(
           existing.title,
           existing.description,
@@ -351,6 +396,8 @@ export function createArtifactService(
           old.format,
           `${publishedBy} (restored v${version})`,
           time,
+          counts?.added ?? null,
+          counts?.removed ?? null,
         );
         stmt.copyFiles.run(next, id, version);
         index.reindexArtifact(id);
@@ -359,14 +406,19 @@ export function createArtifactService(
     },
 
     async get(id, version) {
-      const artifact = findArtifact(id);
-      if (!artifact) return null;
-      const row = stmt.version.get(id, version ?? artifact.latest_version) as
-        | VersionRow
-        | undefined;
-      if (!row) return null;
-      const files = (stmt.files.all(id, row.version) as FileRow[]).map(toFile);
-      return { artifact: toArtifact(artifact), version: toVersion(row, files) };
+      return load(id, version);
+    },
+
+    async compare(id, from, to) {
+      const older = load(id, from);
+      const newer = older && load(id, to);
+      if (!older || !newer) return null;
+      return {
+        artifact: newer.artifact,
+        from: older.version,
+        to: newer.version,
+        ...compareFiles(older.version, newer.version, blobs.readSync),
+      };
     },
 
     async readFile(id, version, path) {

@@ -110,6 +110,7 @@ const ICONS: Record<string, string> = {
   eye: '<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/>',
   plus: '<path d="M8 3v10M3 8h10"/>',
   pencil: '<path d="M10.5 2.5 13.5 5.5 5.5 13.5H2.5v-3zM9 4l3 3"/>',
+  diff: '<path d="M8 2.5v6M5 5.5h6M5 12.5h6"/>',
 };
 
 const SPRITE = raw(

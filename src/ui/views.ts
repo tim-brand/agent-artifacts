@@ -4,7 +4,11 @@ import {
   type Ask,
   type AskOption,
   COMMENT_LIMITS,
+  COMPARE_LIMITS,
+  type Comparison,
   type DeletedArtifact,
+  type DiffHunk,
+  type FileChange,
   type Format,
   type LibraryItem,
   type LibrarySort,
@@ -413,14 +417,7 @@ ${pane('details', detailsPane(a, v, opts.versions, opts.url, opts.notice))}
     theme: opts.theme,
     bodyClass: 'viewer-page',
     body: html`<div class="viewer">
-<header class="vtop">
-<a class="btn ghost icon" href="/" aria-label="Back to the library">${icon('back')}</a>
-<nav class="crumbs" aria-label="Breadcrumbs"><a href="/"><span class="logo sm">${icon('lib')}</span>Library</a><span aria-hidden="true">/</span><b>${a.title}</b></nav>
-<span class="sp"></span>
-${searchBox('', true)}
-<details class="menu"><summary class="av-btn" aria-label="Account and theme"><span class="av sm">${initials(opts.name)}</span></summary>
-<div class="menu-pop right account"><div class="who-text"><span class="who-name">${opts.name}</span><small>${opts.user}</small></div>${themeSwitch(opts.theme, self)}</div></details>
-</header>
+${viewerTop(opts, self, '/', html`<b>${a.title}</b>`)}
 ${tbar}
 ${oldBar}
 <div class="vbody${opts.panel.open ? '' : ' closed'}">
@@ -434,21 +431,61 @@ ${panel}
   });
 }
 
+/** The artifact and compare pages' top bar: back, breadcrumbs, search and the account menu. */
+function viewerTop(
+  who: { user: string; name: string; theme: Theme },
+  self: string,
+  back: string,
+  crumbs: Html,
+): Html {
+  return html`<header class="vtop">
+<a class="btn ghost icon" href="${back}" aria-label="Back">${icon('back')}</a>
+<nav class="crumbs" aria-label="Breadcrumbs"><a href="/"><span class="logo sm">${icon('lib')}</span>Library</a><span aria-hidden="true">/</span>${crumbs}</nav>
+<span class="sp"></span>
+${searchBox('', true)}
+<details class="menu"><summary class="av-btn" aria-label="Account and theme"><span class="av sm">${initials(who.name)}</span></summary>
+<div class="menu-pop right account"><div class="who-text"><span class="who-name">${who.name}</span><small>${who.user}</small></div>${themeSwitch(who.theme, self)}</div></details>
+</header>`;
+}
+
+/** "+18 −4": lines added and removed. Nothing when they aren't known. */
+function delta(added: number | null, removed: number | null, href?: string): Html | '' {
+  if (added === null || removed === null) return '';
+  const title = `${plural(added, 'line')} added, ${removed} removed`;
+  const body = html`<span class="add">+${added}</span><span class="del">−${removed}</span>`;
+  return href
+    ? html`<a class="delta" href="${href}" title="${title}">${body}</a>`
+    : html`<span class="delta" title="${title}">${body}</span>`;
+}
+
+/** The compare page's URL; the default mode is left out. */
+export function compareHref(id: string, from: number, to: number, mode: CompareMode = 'changes') {
+  return `/a/${encodeURIComponent(id)}/compare?from=${from}&to=${to}${mode === 'side' ? '&mode=side' : ''}`;
+}
+
 function versionsPane(a: Artifact, v: Version, versions: Version[]): Html {
   const id = encodeURIComponent(a.id);
-  return html`<div class="phead"><span>${plural(versions.length, 'version')}</span></div>
+  // Compare the version on screen with the one before it (v1: with v2).
+  const to = v.version > 1 ? v.version : Math.min(2, a.latestVersion);
+  const compare =
+    versions.length > 1
+      ? html`<a class="btn sm" href="${compareHref(a.id, to - 1, to)}">${icon('diff')}Compare</a>`
+      : '';
+  return html`<div class="phead"><span>${plural(versions.length, 'version')}</span>${compare}</div>
 <ol class="timeline">
 ${versions.map((x) => {
   const latest = x.version === a.latestVersion;
   const viewing = x.version === v.version;
   const href = `/a/${id}${latest ? '' : `/v/${x.version}`}`;
+  const changes = x.version > 1 ? compareHref(a.id, x.version - 1, x.version) : undefined;
+  const [low, high] = x.version < v.version ? [x.version, v.version] : [v.version, x.version];
   return html`<li class="ver${latest ? ' cur' : ''}${viewing ? ' viewing' : ''}">
 <div class="l1"><b>v${x.version}</b>${latest ? html`<span class="tag">Current</span>` : ''}${viewing && !latest ? html`<span class="tag soft">Viewing</span>` : ''}<span class="t">${time(x.createdAt)}</span></div>
-<div class="by"><span class="dot"></span><span class="label">${x.publishedBy}</span>${x.files.length > 1 ? html`<span>· ${x.files.length} files</span>` : ''}</div>
+<div class="by"><span class="dot"></span><span class="label">${x.publishedBy}</span>${x.files.length > 1 ? html`<span>· ${x.files.length} files</span>` : ''}${delta(x.linesAdded, x.linesRemoved, changes)}</div>
 ${
   viewing && latest
     ? ''
-    : html`<div class="acts">${viewing ? '' : html`<a class="btn sm" href="${href}">${icon('eye')}View</a>`}${latest ? '' : html`<form method="post" action="/a/${id}/v/${x.version}/restore"><button class="btn sm" type="submit">${icon('restore')}Restore</button></form>`}</div>`
+    : html`<div class="acts">${viewing ? '' : html`<a class="btn sm" href="${href}">${icon('eye')}View</a><a class="btn sm" href="${compareHref(a.id, low, high)}" title="Compare v${low} with v${high}">${icon('diff')}Compare</a>`}${latest ? '' : html`<form method="post" action="/a/${id}/v/${x.version}/restore"><button class="btn sm" type="submit">${icon('restore')}Restore</button></form>`}</div>`
 }
 </li>`;
 })}
@@ -642,6 +679,149 @@ ${
 <form method="post" action="/a/${id}/delete" data-confirm="Move this artifact to the trash? It stays there for ${TRASH_DAYS} days."><button class="btn sm danger" type="submit">${icon('trash')}Move to trash</button></form>
 <span class="muted">Kept in the trash for ${TRASH_DAYS} days.</span>
 </div>`;
+}
+
+// ---- Compare page ----
+
+export type CompareMode = 'changes' | 'side';
+
+const STATUS_LABELS: Record<FileChange['status'], string> = {
+  added: 'Added',
+  removed: 'Removed',
+  changed: 'Changed',
+  renamed: 'Renamed',
+};
+
+const fileName = (f: FileChange) => (f.oldPath ? `${f.oldPath} → ${f.path}` : f.path);
+
+/** "⋯ 12 unchanged lines" between hunks. */
+const gapRow = (lines: number) =>
+  lines > 0
+    ? html`<tr class="gap"><td class="ln" colspan="2">⋯</td><td class="code">${plural(lines, 'unchanged line')}</td></tr>`
+    : '';
+
+/** A hunk as table rows with old and new line numbers. The text is untrusted: html`` escapes it. */
+function hunkRows(hunk: DiffHunk, gap: number): Html {
+  let old = hunk.oldStart;
+  let now = hunk.newStart;
+  const rows = hunk.lines.map((line) => {
+    const text = line.slice(1);
+    switch (line[0]) {
+      case '+':
+        return html`<tr class="add"><td class="ln"></td><td class="ln">${now++}</td><td class="code">${text}</td></tr>`;
+      case '-':
+        return html`<tr class="del"><td class="ln">${old++}</td><td class="ln"></td><td class="code">${text}</td></tr>`;
+      case '\\':
+        return html`<tr class="eof"><td class="ln" colspan="2"></td><td class="code">No newline at end of file</td></tr>`;
+      default:
+        return html`<tr><td class="ln">${old++}</td><td class="ln">${now++}</td><td class="code">${text}</td></tr>`;
+    }
+  });
+  return html`${gapRow(gap)}${rows}`;
+}
+
+function fileDiff(f: FileChange, index: number): Html {
+  let end = 1;
+  const rows = f.hunks.map((hunk) => {
+    const gap = Math.max(0, hunk.oldStart - end);
+    end = hunk.oldStart + hunk.oldLines;
+    return hunkRows(hunk, gap);
+  });
+  const note =
+    f.diff === 'binary'
+      ? 'Binary file: not compared.'
+      : f.diff === 'too_large'
+        ? 'Too many changes to show.'
+        : f.truncated
+          ? `${f.hunks.length ? 'The rest of this diff is' : 'This diff is'} not shown: a comparison stops at ${COMPARE_LIMITS.diffBytes / 1024} KB.`
+          : f.hunks.length === 0
+            ? 'Same content.'
+            : '';
+  return html`<section class="dfile" id="file-${index + 1}">
+<header class="dhead"><span class="path mono">${fileName(f)}</span><span class="tag ${f.status}">${STATUS_LABELS[f.status]}</span><span class="sp"></span>${delta(f.linesAdded, f.linesRemoved)}</header>
+${rows.length ? html`<div class="dbody"><table class="diff"><tbody>${rows}</tbody></table></div>` : ''}
+${note ? html`<p class="note">${note}</p>` : ''}
+</section>`;
+}
+
+function changesView(c: Comparison): Html {
+  if (c.files.length === 0) {
+    return html`<div class="empty">${icon('diff', 'big')}<h2>No changes</h2><p class="muted">v${c.from.version} and v${c.to.version} have the same files.</p></div>`;
+  }
+  const multi = c.from.files.length > 1 || c.to.files.length > 1;
+  const summary = html`<div class="cmp-sum"><b>v${c.from.version}</b><span class="muted">→</span><b>v${c.to.version}</b>${delta(c.linesAdded, c.linesRemoved)}<span class="muted">· ${plural(c.files.length, 'file')} changed${multi ? ` · ${c.unchanged} unchanged` : ''}</span></div>`;
+  const list = multi
+    ? html`<ul class="cfiles">${c.files.map(
+        (f, i) =>
+          html`<li><a href="#file-${i + 1}"><span class="tag ${f.status}">${STATUS_LABELS[f.status]}</span><span class="path mono">${fileName(f)}</span></a>${delta(f.linesAdded, f.linesRemoved)}</li>`,
+      )}</ul>`
+    : '';
+  const cut = c.truncated
+    ? html`<div class="notice warn">This comparison is longer than ${COMPARE_LIMITS.diffBytes / 1024} KB, so only its start is shown.</div>`
+    : '';
+  return html`${summary}${cut}${list}${c.files.map(fileDiff)}`;
+}
+
+export function comparePage(opts: {
+  user: string;
+  name: string;
+  theme: Theme;
+  comparison: Comparison;
+  versions: Version[];
+  mode: CompareMode;
+  /** Signed content URL of a file of a version. */
+  url: (version: number, path: string) => string;
+}): Html {
+  const c = opts.comparison;
+  const a = c.artifact;
+  const id = encodeURIComponent(a.id);
+  const self = compareHref(a.id, c.from.version, c.to.version, opts.mode);
+  const versionHref = (n: number) => `/a/${id}${n === a.latestVersion ? '' : `/v/${n}`}`;
+
+  const select = (name: 'from' | 'to', chosen: number) =>
+    html`<select class="input vpick" name="${name}" aria-label="${name === 'from' ? 'Compare from version' : 'To version'}">${opts.versions.map(
+      (x) =>
+        html`<option value="${x.version}"${x.version === chosen ? raw(' selected') : ''}>v${x.version} · ${shortTime(x.createdAt)}</option>`,
+    )}</select>`;
+  const picker = html`<form class="cmp-pick" method="get" action="/a/${id}/compare" data-autosubmit>
+${select('from', c.from.version)}<span class="muted" aria-hidden="true">→</span>${select('to', c.to.version)}
+${opts.mode === 'side' ? html`<input type="hidden" name="mode" value="side">` : ''}
+<button class="btn sm go" type="submit">Compare</button>
+</form>`;
+  const modeLink = (mode: CompareMode, label: string) => {
+    const on = mode === opts.mode;
+    return html`<a href="${compareHref(a.id, c.from.version, c.to.version, mode)}"${on ? raw(' aria-current="true" class="on"') : ''}>${label}</a>`;
+  };
+
+  const tbar = html`<div class="tbar">
+${formatIcon(c.to.format)}<h1 class="title">${a.title}</h1><span class="muted fmt">Compare versions</span>
+<span class="sp"></span>
+${picker}
+<span class="seg text" role="group" aria-label="Show">${modeLink('changes', 'Changes')}${modeLink('side', 'Side by side')}</span>
+</div>`;
+
+  // The same sandbox as the artifact page; these frames get no runtime port.
+  const half = (v: Version) =>
+    html`<div class="half">
+<div class="half-head"><b>v${v.version}</b><span class="muted">· ${time(v.createdAt)} · ${v.publishedBy}</span><span class="sp"></span><a class="btn ghost sm" href="${versionHref(v.version)}">${icon('eye')}View</a></div>
+<div class="frame"><iframe class="cmp-frame" src="${opts.url(v.version, v.entry)}" title="${a.title}, v${v.version}"${v.format === 'pdf' ? '' : html` sandbox="${SANDBOX}"`}></iframe></div>
+</div>`;
+
+  const body =
+    opts.mode === 'side'
+      ? html`<div class="split">${half(c.from)}${half(c.to)}</div>`
+      : html`<div class="cmp"><div class="cmp-in">${changesView(c)}</div></div>`;
+
+  return htmlPage({
+    title: `Compare v${c.from.version} and v${c.to.version} · ${a.title}`,
+    theme: opts.theme,
+    bodyClass: 'viewer-page',
+    body: html`<div class="viewer">
+${viewerTop(opts, self, `/a/${id}`, html`<a href="/a/${id}">${a.title}</a><span aria-hidden="true">/</span><b>Compare</b>`)}
+${tbar}
+${body}
+</div>`,
+  });
 }
 
 // ---- Other pages ----
