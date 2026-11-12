@@ -248,7 +248,7 @@ function securityHeaders(contentType: string, policy: Policy): Record<string, st
   };
 }
 
-/** The ingress sets X-Forwarded-For. Without it, everyone shares one bucket. */
+/** The reverse proxy sets X-Forwarded-For. Without it, everyone shares one bucket. */
 function clientIp(req: HonoRequest): string {
   return req.header('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
 }

@@ -23,6 +23,8 @@ function setup(t: TestContext) {
     contentOrigin: 'https://content.test',
     signingSecret: 'x'.repeat(32),
     devUser: null,
+    authEmailHeader: 'X-authentik-email',
+    authNameHeader: 'X-authentik-name',
   };
   const core = createCore(config);
   const app = createApp({ config, ...core });
@@ -30,7 +32,11 @@ function setup(t: TestContext) {
     core.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  const request = (path: string, init?: RequestInit) => app.request(`${APP}${path}`, init);
+  const request = (path: string, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    headers.set('host', new URL(APP).host);
+    return app.request(`${APP}${path}`, { ...init, headers });
+  };
   return { app, core, request };
 }
 
@@ -374,6 +380,36 @@ describe('public endpoints', () => {
       assert.equal(json.error, error, JSON.stringify(body));
       assert.equal(typeof json.error_description, 'string');
     }
+  });
+
+  it('limits a body by the bytes read, with or without Content-Length', async (t) => {
+    const { request } = setup(t);
+    const chunk = new TextEncoder().encode(`{"client_name":"${'a'.repeat(1024)}"}`.slice(0, 1024));
+    let sent = 0;
+    // A streamed body has no Content-Length: only the bytes actually read can stop it.
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent += chunk.length;
+        if (sent > 1024 * 1024) controller.close();
+        else controller.enqueue(chunk);
+      },
+    });
+    const res = await request('/oauth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': '10.7.0.1' },
+      body,
+      duplex: 'half',
+    } as RequestInit);
+    assert.equal(res.status, 400);
+    assert.equal((await res.json()).error, 'invalid_client_metadata');
+    assert.ok(sent < 1024 * 1024, `read ${sent} bytes`);
+    const sized = await request('/oauth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': '10.7.0.2' },
+      body: JSON.stringify({ client_name: 'a'.repeat(20_000) }),
+    });
+    assert.equal(sized.status, 400);
+    assert.equal((await sized.json()).error_description, 'The request is too large');
   });
 
   it('registration is rate limited per client IP', async (t) => {

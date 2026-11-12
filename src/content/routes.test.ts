@@ -167,6 +167,8 @@ const deps = {
     contentOrigin: CONTENT,
     signingSecret: SECRET,
     devUser: null,
+    authEmailHeader: 'X-authentik-email',
+    authNameHeader: 'X-authentik-name',
   },
   artifacts,
   signer,

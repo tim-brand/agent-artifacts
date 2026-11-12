@@ -605,9 +605,9 @@ function bearer(header: string | undefined): string | null {
 
 /**
  * MCP over Streamable HTTP, stateless: a fresh server and transport per request.
- * The ingress puts no forward auth in front of /mcp, so only the bearer token counts here: a
+ * The sign-in proxy must not sit in front of /mcp, so only the bearer token counts here: a
  * personal access token (aa_...) or an OAuth access token issued for this endpoint.
- * X-authentik-* headers are never read.
+ * Identity headers (AUTH_EMAIL_HEADER) are never read.
  */
 export function createMcpRoutes(deps: McpDeps): Hono {
   const app = new Hono();

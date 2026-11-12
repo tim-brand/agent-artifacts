@@ -224,6 +224,8 @@ function setup(
       contentOrigin: 'https://content.test',
       signingSecret: 'x'.repeat(32),
       devUser: null,
+      authEmailHeader: 'X-authentik-email',
+      authNameHeader: 'X-authentik-name',
     },
     artifacts,
     comments,

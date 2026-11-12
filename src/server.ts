@@ -1,10 +1,25 @@
 import { serve } from '@hono/node-server';
 import { createApp } from './app.ts';
-import { loadConfig } from './config.ts';
+import { type Config, ConfigError, loadConfig } from './config.ts';
 import { createCore } from './core/index.ts';
 import { schedulePurge } from './core/purge.ts';
 
-const config = loadConfig();
+let config: Config;
+try {
+  config = loadConfig();
+} catch (error) {
+  if (!(error instanceof ConfigError)) throw error;
+  console.error(`agent-artifacts: ${error.message}`);
+  console.error('See .env.example and the README for the settings.');
+  process.exit(1);
+}
+
+if (config.devUser) {
+  console.warn(
+    `agent-artifacts: WARNING: DEV_USER is set, so everyone who can reach port ${config.port} is signed in as ${config.devUser}. Use it for local development only.`,
+  );
+}
+
 const core = createCore(config);
 const app = createApp({ config, ...core });
 const stopPurge = schedulePurge(() => core.purge());

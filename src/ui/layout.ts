@@ -63,7 +63,7 @@ export type Nav = 'library' | 'asks' | 'trash' | 'connections' | 'connect' | 'do
 /** What every page of the app shell needs. */
 export type Shell = {
   user: string;
-  /** The display name: X-authentik-name, else the email. */
+  /** The display name: the name header, else the email. */
   name: string;
   theme: Theme;
   summary: LibrarySummary;
@@ -226,7 +226,7 @@ ${nav('/connect', 'Connect an agent', 'plug', shell.nav === 'connect')}
 ${nav('/docs/runtime', 'Live pages docs', 'book', shell.nav === 'docs')}
 </nav>
 <div class="who">
-<div class="who-row"><span class="av" aria-hidden="true">${initials(shell.name)}</span><span class="who-text"><span class="who-name">${shell.name}</span><small>${shell.name === shell.user ? 'signed in via Authentik' : shell.user}</small></span></div>
+<div class="who-row"><span class="av" aria-hidden="true">${initials(shell.name)}</span><span class="who-text"><span class="who-name">${shell.name}</span><small>${shell.name === shell.user ? 'signed in' : shell.user}</small></span></div>
 ${themeSwitch(shell.theme, shell.path)}
 </div>
 </div>
