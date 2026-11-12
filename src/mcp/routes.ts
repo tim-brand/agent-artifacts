@@ -95,6 +95,8 @@ Settings only: pass \`id\` with only \`title\`, \`description\` and/or \`capabil
 
 Live pages: \`capabilities\` {db?: boolean, viewer?: boolean} lets an HTML page use window.openArtifacts when opened in the web app: \`db\` for its own documents (window.openArtifacts.db, and the artifact_data_* tools), \`viewer\` for the signed-in user's {email, name}. Giving it replaces the artifact's capabilities (a missing key is false); omit it to keep them. The page's script awaits openArtifacts.ready; outside the app (its own tab, a public link) db calls reject with {code: "no_shell"}, so show a note instead. The web app's /docs/runtime page documents the API with a sample poll.
 
+HTML pages and the runtime: in the web app every HTML page gets window.openArtifacts, with or without capabilities (it carries \`theme\` and \`onTheme\`), while a page opened locally or in its own tab may not have it. So a page must work both ways: don't call code that needs your own setup (canvas size, state) from the runtime branch before that setup has run, and test the page once with a stub such as \`window.openArtifacts = { theme: 'dark', onTheme() {}, ready: Promise.resolve() }\` defined before your script.
+
 Limits: ${LIMITS.publishBytes / MB} MB decoded per publish, ${LIMITS.fileBytes / MB} MB per file, ${LIMITS.files} files. Base64 is a third larger than the bytes and all of it goes inline in this call, so a big image (several MB) makes a very large request: prefer a compact PNG, JPEG or WebP, or an SVG.`;
 
 const anchorSchema = z.discriminatedUnion('kind', [
