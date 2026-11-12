@@ -55,14 +55,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (signingSecret.length < 32) {
     throw new ConfigError('SIGNING_SECRET must be at least 32 characters');
   }
-  const port = Number(env.PORT ?? 3000);
+  // An empty value means the default, as for every other setting. Number('') would be port 0.
+  const port = Number(env.PORT || 3000);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new ConfigError('PORT must be a port number');
   }
 
   const config: Config = {
     port,
-    dataDir: env.DATA_DIR ?? './data',
+    dataDir: env.DATA_DIR || './data',
     appOrigin: origin(env, 'APP_ORIGIN'),
     contentOrigin: origin(env, 'CONTENT_ORIGIN'),
     signingSecret,

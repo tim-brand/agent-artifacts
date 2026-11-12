@@ -72,3 +72,10 @@ test('missing and invalid settings are config errors', () => {
   refused({ ...PUBLIC, APP_ORIGIN: 'nonsense' }, /APP_ORIGIN must be an origin/);
   refused({ ...PUBLIC, CONTENT_ORIGIN: PUBLIC.APP_ORIGIN }, /different hosts/);
 });
+
+test('an empty PORT or DATA_DIR means the default', () => {
+  const config = loadConfig({ ...PUBLIC, PORT: '', DATA_DIR: '' });
+  assert.equal(config.port, 3000);
+  assert.equal(config.dataDir, './data');
+  refused({ ...PUBLIC, PORT: 'http' }, /PORT must be a port number/);
+});
