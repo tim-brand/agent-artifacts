@@ -171,6 +171,7 @@ const deps = {
   artifacts,
   signer,
   tokens: {} as Deps['tokens'],
+  oauth: {} as Deps['oauth'],
   shareLinks: {} as Deps['shareLinks'],
   comments: {} as Deps['comments'],
   data: {} as Deps['data'],

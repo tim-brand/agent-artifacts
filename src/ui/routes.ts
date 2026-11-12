@@ -2,11 +2,13 @@ import { type Context, Hono } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
 import {
   AppError,
+  type AuthorizeParams,
   type Deps,
   type Format,
   type LibraryFilter,
   type ShareLink,
 } from '../contracts.ts';
+import { PUBLIC_OAUTH_PATHS } from '../oauth/rules.ts';
 import { createApiRoutes } from './api.ts';
 import { docsRuntimePage } from './docs.ts';
 import {
@@ -22,7 +24,9 @@ import {
   artifactPage,
   type CompareMode,
   comparePage,
+  connectionsPage,
   connectPage,
+  consentPage,
   FORMATS,
   LIBRARY_TABS,
   type LibraryTab,
@@ -31,7 +35,6 @@ import {
   PANEL_TABS,
   type PanelTab,
   searchPage,
-  tokensPage,
   trashPage,
 } from './views.ts';
 
@@ -53,6 +56,11 @@ const EXPIRY_DAYS = ['', '1', '7', '30', '90'];
 
 /** Preferences, kept in cookies so the server renders them without a flash. app.js sets them too. */
 const COOKIES = { theme: 'aa_theme', view: 'aa_view', panel: 'aa_panel' } as const;
+
+/** Paths answered by mcp/ and oauth/ without forward auth; the UI must never serve them. */
+const PUBLIC_PATHS = new Set(PUBLIC_OAUTH_PATHS);
+const isPublicPath = (path: string) =>
+  path === '/mcp' || path.startsWith('/mcp/') || PUBLIC_PATHS.has(path);
 
 /** Positive integer from a path segment, else null. */
 function versionParam(value: string): number | null {
@@ -78,7 +86,7 @@ const TAB_FILTERS: Record<LibraryTab, LibraryFilter> = {
  * from X-authentik-email (or DEV_USER locally). Every POST must come from the app origin.
  */
 export function createUiRoutes(deps: Deps): Hono {
-  const { config, artifacts, comments, tokens, shareLinks, signer } = deps;
+  const { config, artifacts, comments, tokens, oauth, shareLinks, signer } = deps;
   const csp = contentSecurityPolicy(config.contentOrigin);
   const secure = config.appOrigin.startsWith('https:');
   const ui = new Hono<Env>();
@@ -131,11 +139,11 @@ export function createUiRoutes(deps: Deps): Hono {
   };
 
   ui.use('*', async (c, next) => {
-    // Forward auth is skipped on /mcp, so its X-authentik-* headers can be forged: never trust them
-    // there. This only runs when the MCP routes did not answer the request themselves.
-    if (c.req.path === '/mcp' || c.req.path.startsWith('/mcp/')) return c.text('Not Found', 404);
+    // Forward auth is skipped on /mcp and the public OAuth paths, so their X-authentik-* headers can
+    // be forged: never trust them there. This only runs when those routes did not answer.
+    if (isPublicPath(c.req.path)) return c.text('Not Found', 404);
     await next();
-    c.header('Content-Security-Policy', csp);
+    if (!c.res.headers.has('Content-Security-Policy')) c.header('Content-Security-Policy', csp);
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'same-origin');
     c.header('X-Frame-Options', 'DENY');
@@ -438,30 +446,126 @@ export function createUiRoutes(deps: Deps): Hono {
     return c.redirect(localPath(field(form, 'back')), 303);
   });
 
-  ui.get('/settings/tokens', async (c) =>
-    c.html(tokensPage({ shell: await shell(c, 'tokens'), tokens: await tokens.list() })),
-  );
+  const connections = async (
+    c: Context<Env>,
+    extra: { created?: Parameters<typeof connectionsPage>[0]['created']; error?: string } = {},
+  ) =>
+    connectionsPage({
+      shell: await shell(c, 'connections', { path: '/settings/connections' }),
+      grants: await oauth.listGrants(),
+      tokens: await tokens.list(),
+      ...extra,
+    });
+
+  ui.get('/settings/connections', async (c) => c.html(await connections(c)));
+  // The page was called Tokens before.
+  ui.get('/settings/tokens', (c) => c.redirect('/settings/connections', 301));
 
   ui.post('/settings/tokens', async (c) => {
     const body = await c.req.parseBody();
     const name = typeof body.name === 'string' ? body.name.trim() : '';
-    const tokenShell = () => shell(c, 'tokens', { path: '/settings/tokens' });
     if (!name || name.length > 100) {
-      const page = tokensPage({
-        shell: await tokenShell(),
-        tokens: await tokens.list(),
-        error: 'Give the token a name of at most 100 characters.',
-      });
-      return c.html(page, 400);
+      const error = 'Give the token a name of at most 100 characters.';
+      return c.html(await connections(c, { error }), 400);
     }
     const created = await tokens.create(name);
     c.header('Cache-Control', 'no-store');
-    return c.html(tokensPage({ shell: await tokenShell(), tokens: await tokens.list(), created }));
+    return c.html(await connections(c, { created }));
   });
 
   ui.post('/settings/tokens/:id/revoke', async (c) => {
     if (!(await tokens.revoke(c.req.param('id')))) return notFound(c);
-    return c.redirect('/settings/tokens', 303);
+    return c.redirect('/settings/connections', 303);
+  });
+
+  ui.post('/settings/connections/:id/revoke', async (c) => {
+    if (!(await oauth.revokeGrant(c.req.param('id')))) return notFound(c);
+    return c.redirect('/settings/connections', 303);
+  });
+
+  // ---- OAuth authorization endpoint (behind forward auth, so the sign-in is Authentik's) ----
+
+  /** The answer to the client: a redirect to its redirect_uri with the code or the error, and iss. */
+  const answer = (redirectUri: string, params: Record<string, string | null>) => {
+    const url = new URL(redirectUri);
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null) url.searchParams.set(key, value);
+    }
+    url.searchParams.set('iss', config.appOrigin);
+    return url.toString();
+  };
+
+  const authorize = async (c: Context<Env>, params: AuthorizeParams, decision?: string) => {
+    const check = await oauth.checkAuthorize(params);
+    if (!check.ok && check.redirect === null) {
+      return message(c, 400, 'Cannot connect this app', check.description);
+    }
+    if (!check.ok) {
+      const to = answer(check.redirect, {
+        error: check.error,
+        error_description: check.description,
+        state: check.state,
+      });
+      return c.redirect(to, 303);
+    }
+    const { request } = check;
+    if (decision === undefined) {
+      // Browsers apply form-action to the redirect after the POST too: allow the client's origin.
+      // CSP can't name an IPv6 literal, so [::1] gets the scheme.
+      const target = new URL(request.redirectUri);
+      const source = target.hostname.startsWith('[') ? target.protocol : target.origin;
+      c.header('Content-Security-Policy', contentSecurityPolicy(config.contentOrigin, [source]));
+      const user = c.get('user');
+      return c.html(
+        consentPage({
+          theme: theme(c),
+          user,
+          name: c.req.header('x-authentik-name') || user,
+          request,
+          params,
+        }),
+      );
+    }
+    if (decision !== 'allow') {
+      const to = answer(request.redirectUri, {
+        error: 'access_denied',
+        error_description: 'The user denied the request',
+        state: request.state,
+      });
+      return c.redirect(to, 303);
+    }
+    const code = await oauth.createCode(request, c.get('user'));
+    c.header('Cache-Control', 'no-store');
+    return c.redirect(answer(request.redirectUri, { code, state: request.state }), 303);
+  };
+
+  const AUTHORIZE_KEYS = [
+    'response_type',
+    'client_id',
+    'redirect_uri',
+    'code_challenge',
+    'code_challenge_method',
+    'state',
+    'resource',
+    'scope',
+  ] as const;
+  const pick = (get: (key: string) => string | undefined): AuthorizeParams =>
+    Object.fromEntries(
+      AUTHORIZE_KEYS.map((key) => [key, get(key)]).filter(([, value]) => value !== undefined),
+    );
+
+  ui.get('/oauth/authorize', (c) =>
+    authorize(
+      c,
+      pick((key) => c.req.query(key)),
+    ),
+  );
+
+  // The consent form; the Origin check above guards it. Everything is checked again.
+  ui.post('/oauth/authorize', async (c) => {
+    const form = await c.req.parseBody();
+    const value = (key: string) => (typeof form[key] === 'string' ? form[key] : undefined);
+    return authorize(c, pick(value), value('decision') ?? 'deny');
   });
 
   ui.get('/connect', async (c) =>

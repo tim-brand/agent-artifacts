@@ -198,6 +198,54 @@ const MIGRATIONS: Migration[] = [
       previous = text ?? '';
     }
   },
+  // OAuth for MCP clients: self-registered public clients, single-use codes, and grants (a client
+  // signed in by the user) with their access and refresh tokens. Codes and tokens are stored only
+  // as SHA-256 hashes. A rotated refresh token keeps its row with used_at set, so reusing it is
+  // detected; a used code keeps the grant it made, so reusing it revokes that grant.
+  `
+  CREATE TABLE oauth_clients (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL
+  );
+
+  CREATE TABLE oauth_grants (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL REFERENCES oauth_clients (id) ON DELETE CASCADE,
+    user_email TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT
+  );
+  CREATE INDEX oauth_grants_by_client ON oauth_grants (client_id);
+
+  CREATE TABLE oauth_codes (
+    code_hash TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL REFERENCES oauth_clients (id) ON DELETE CASCADE,
+    user_email TEXT NOT NULL,
+    redirect_uri TEXT,
+    code_challenge TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    grant_id TEXT
+  ) WITHOUT ROWID;
+
+  CREATE TABLE oauth_tokens (
+    token_hash TEXT PRIMARY KEY,
+    grant_id TEXT NOT NULL REFERENCES oauth_grants (id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('access', 'refresh')),
+    expires_at TEXT NOT NULL,
+    used_at TEXT
+  ) WITHOUT ROWID;
+  CREATE INDEX oauth_tokens_by_grant ON oauth_tokens (grant_id);
+  `,
 ];
 
 export function openDb(dataDir: string, blobs: BlobStore): DatabaseSync {

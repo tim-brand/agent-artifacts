@@ -3,6 +3,8 @@ import {
   type Artifact,
   type Ask,
   type AskOption,
+  type AuthorizeParams,
+  type AuthorizeRequest,
   COMMENT_LIMITS,
   COMPARE_LIMITS,
   type Comparison,
@@ -12,6 +14,7 @@ import {
   type Format,
   type LibraryItem,
   type LibrarySort,
+  type OAuthGrant,
   type SearchHit,
   type ShareLink,
   type Thread,
@@ -19,6 +22,7 @@ import {
   TRASH_DAYS,
   type Version,
 } from '../contracts.ts';
+import { isLoopback } from '../oauth/rules.ts';
 import {
   appShell,
   type Html,
@@ -849,8 +853,9 @@ ${body}`,
   });
 }
 
-export function tokensPage(opts: {
+export function connectionsPage(opts: {
   shell: Shell;
+  grants: OAuthGrant[];
   tokens: TokenInfo[];
   created?: { token: string; info: TokenInfo };
   error?: string;
@@ -863,9 +868,23 @@ export function tokensPage(opts: {
 </div>`
     : '';
 
+  const grants =
+    opts.grants.length === 0
+      ? html`<div class="empty">${icon('plug', 'big')}<h2>No apps signed in</h2><p class="muted">Agents that support OAuth sign in from the app: see <a href="/connect">Connect an agent</a>.</p></div>`
+      : html`<div class="list">
+${opts.grants.map(
+  (g) => html`<article class="row token-row">
+${icon('plug')}
+<div class="row-main"><span class="ttl">${g.clientName}</span><div class="sub">signed in ${time(g.createdAt)} as ${g.user}</div></div>
+<div class="sub">${g.lastUsedAt ? html`used ${time(g.lastUsedAt)}` : 'never used'}</div>
+<form method="post" action="/settings/connections/${encodeURIComponent(g.id)}/revoke" data-confirm="Revoke this sign-in? ${g.clientName} loses access until it signs in again."><button class="btn sm danger" type="submit">Revoke</button></form>
+</article>`,
+)}
+</div>`;
+
   const rows =
     opts.tokens.length === 0
-      ? html`<div class="empty">${icon('key', 'big')}<h2>No tokens yet</h2><p class="muted">Create one for each agent or machine.</p></div>`
+      ? html`<div class="empty">${icon('key', 'big')}<h2>No tokens yet</h2><p class="muted">For agents without OAuth: create one per agent or machine.</p></div>`
       : html`<div class="list">
 ${opts.tokens.map(
   (t) => html`<article class="row token-row">
@@ -878,9 +897,12 @@ ${icon('key')}
 </div>`;
 
   return appShell(opts.shell, {
-    title: 'Tokens',
-    body: html`<div class="h1row"><h1>Tokens</h1></div>
-<p class="lead">Agents use a token to publish over MCP. Create one per agent or machine.</p>
+    title: 'Connections',
+    body: html`<div class="h1row"><h1>Connections</h1></div>
+<p class="lead">Agents publish over MCP. Apps that support OAuth sign in through this site; the others use a personal access token. See <a href="/connect">Connect an agent</a>.</p>
+<div class="h1row section"><h2>Signed-in apps</h2><span class="count">${plural(opts.grants.length, 'app')}</span></div>
+${grants}
+<div class="h1row section"><h2>Personal access tokens</h2><span class="count">${plural(opts.tokens.length, 'token')}</span></div>
 ${created}
 ${opts.error ? html`<div class="notice error">${opts.error}</div>` : ''}
 <form method="post" action="/settings/tokens" class="inline-form">
@@ -891,23 +913,84 @@ ${rows}`,
   });
 }
 
+/** Where the consent sends the browser back to, in words. */
+function redirectTarget(uri: string): { host: string; local: boolean } {
+  const url = new URL(uri);
+  return { host: url.host, local: isLoopback(uri) };
+}
+
+/**
+ * The OAuth consent page: who asks, where the answer goes, and Allow or Deny. The hidden fields
+ * repeat the request; the POST checks all of it again.
+ */
+export function consentPage(opts: {
+  theme: Theme;
+  user: string;
+  name: string;
+  request: AuthorizeRequest;
+  /** The request's own parameters, posted back as they came. */
+  params: AuthorizeParams;
+}): Html {
+  const { request, params } = opts;
+  const target = redirectTarget(request.redirectUri);
+  const hidden = Object.entries(params).map(([key, value]) =>
+    value === undefined ? '' : html`<input type="hidden" name="${key}" value="${value}">`,
+  );
+  return htmlPage({
+    title: `Connect ${request.client.name}`,
+    theme: opts.theme,
+    bodyClass: 'bare',
+    body: html`<main class="message consent">
+<a class="brand" href="/"><span class="logo">${icon('lib')}</span>Agent Artifacts</a>
+<div class="message-card">
+<span class="consent-icon" aria-hidden="true">${icon('plug', 'consent-ic')}</span>
+<h1>Connect ${request.client.name}?</h1>
+<p class="muted">It will be able to publish, read, change and delete your artifacts, comments and live page data over MCP.</p>
+<dl class="details consent-details">
+<dt>App</dt><dd><b>${request.client.name}</b> <span class="badge">named by the app itself</span></dd>
+<dt>Returns to</dt><dd><span class="mono">${target.host}</span>${target.local ? html` <span class="muted">· an app on this computer</span>` : ''}</dd>
+<dt>Signed in as</dt><dd>${opts.name === opts.user ? opts.user : html`${opts.name} <span class="muted">· ${opts.user}</span>`}</dd>
+</dl>
+${target.local ? '' : html`<div class="notice warn"><p>After you allow it, your browser goes to <b>${target.host}</b>. Only allow this if you know that site.</p></div>`}
+<form method="post" action="/oauth/authorize" class="consent-form">
+${hidden}
+<button class="btn" type="submit" name="decision" value="deny">Deny</button>
+<button class="btn primary" type="submit" name="decision" value="allow">Allow</button>
+</form>
+<p class="note">Only allow this if you just started connecting this app. You can revoke it any time under <a href="/settings/connections">Connections</a>.</p>
+</div>
+</main>`,
+  });
+}
+
 export function connectPage(opts: { shell: Shell; appOrigin: string }): Html {
   const mcpUrl = `${opts.appOrigin}/mcp`;
-  const claude = `claude mcp add --transport http -s user agent-artifacts ${mcpUrl} --header "Authorization: Bearer <TOKEN>"`;
-  const opencode = JSON.stringify(
+  const claude = `claude mcp add --transport http -s user agent-artifacts ${mcpUrl}`;
+  const opencode = `opencode mcp add agent-artifacts --global --url ${mcpUrl}\nopencode mcp auth agent-artifacts`;
+  const codex = `codex mcp add agent-artifacts --url ${mcpUrl}\ncodex mcp login agent-artifacts`;
+  const generic = JSON.stringify(
+    { mcpServers: { 'agent-artifacts': { type: 'http', url: mcpUrl } } },
+    null,
+    2,
+  );
+  const claudeToken = `claude mcp add --transport http -s user agent-artifacts ${mcpUrl} --header "Authorization: Bearer <TOKEN>"`;
+  const opencodeToken = JSON.stringify(
     {
       mcp: {
-        'agent-artifacts': {
-          type: 'remote',
-          url: mcpUrl,
-          headers: { Authorization: 'Bearer {file:~/.agent-artifacts-token}' },
+        servers: {
+          'agent-artifacts': {
+            type: 'remote',
+            url: mcpUrl,
+            oauth: false,
+            headers: { Authorization: 'Bearer {env:AGENT_ARTIFACTS_TOKEN}' },
+          },
         },
       },
     },
     null,
     2,
   );
-  const generic = JSON.stringify(
+  const genericToken = JSON.stringify(
     {
       mcpServers: {
         'agent-artifacts': {
@@ -925,16 +1008,28 @@ export function connectPage(opts: { shell: Shell; appOrigin: string }): Html {
     title: 'Connect',
     body: html`<div class="prose">
 <div class="h1row"><h1>Connect an agent</h1></div>
-<p class="lead">Agents publish over MCP (streamable HTTP) with a bearer token. <a href="/settings/tokens">Create a token</a> first and use it in place of <code>&lt;TOKEN&gt;</code>.</p>
+<p class="lead">Agents publish over MCP (streamable HTTP). Add the MCP URL to your agent and sign in: it opens this site in your browser, where you allow it. Signed-in apps are listed under <a href="/settings/connections">Connections</a>, where you can revoke them.</p>
 <h2>MCP URL</h2>
 ${snippet('mcp-url', mcpUrl)}
 <h2>Claude Code</h2>
 ${snippet('claude', claude)}
+<p class="muted">Then run <code>/mcp</code> in Claude Code, pick <b>agent-artifacts</b> and choose Authenticate.</p>
 <h2>OpenCode</h2>
-<p class="muted">In <code>opencode.json</code>. Save the token in <code>~/.agent-artifacts-token</code>.</p>
 ${snippet('opencode', opencode)}
+<p class="muted">Or run <code>/mcps</code> in OpenCode, select <b>agent-artifacts</b> and sign in.</p>
+<h2>Codex</h2>
+${snippet('codex', codex)}
 <h2>Other MCP clients</h2>
+<p class="muted">Any client that supports MCP authorization (OAuth 2.1 with dynamic client registration) finds the sign-in by itself:</p>
 ${snippet('generic', generic)}
+<h2>With a token instead</h2>
+<p>For a client without OAuth, <a href="/settings/connections">create a personal access token</a> and use it in place of <code>&lt;TOKEN&gt;</code>.</p>
+<p class="muted">Claude Code:</p>
+${snippet('claude-token', claudeToken)}
+<p class="muted">OpenCode, in <code>opencode.jsonc</code>, with the token in the <code>AGENT_ARTIFACTS_TOKEN</code> environment variable:</p>
+${snippet('opencode-token', opencodeToken)}
+<p class="muted">Other MCP clients:</p>
+${snippet('generic-token', genericToken)}
 <h2>Live pages</h2>
 <p>HTML artifacts can keep data, such as poll votes or a checklist: see <a href="/docs/runtime">the runtime</a>.</p>
 </div>`,

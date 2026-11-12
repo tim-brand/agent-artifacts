@@ -21,6 +21,9 @@ import {
 import { createMcpRoutes } from './routes.ts';
 
 const TOKEN = 'aa_good';
+const OAUTH_TOKEN = 'aat_good';
+const CHALLENGE =
+  'Bearer resource_metadata="https://app.test/.well-known/oauth-protected-resource"';
 const tokenInfo: TokenInfo = {
   id: 't1',
   name: 'claude-laptop',
@@ -208,6 +211,7 @@ function setup(
     ...dataOverrides,
   };
   const shareCalls: string[] = [];
+  const verified: string[][] = [];
   const record = (name: string) => async () => {
     shareCalls.push(name);
     throw new Error(`${name} must not be reachable from MCP`);
@@ -230,6 +234,14 @@ function setup(
       revoke: async () => false,
       verify: async (token) => (token === TOKEN ? tokenInfo : null),
     },
+    oauth: {
+      async verifyAccess(token, resource) {
+        verified.push([token, resource]);
+        return token === OAUTH_TOKEN && resource === 'https://app.test/mcp'
+          ? { grantId: 'g1', clientName: 'Claude Code', user: 'owner@example.com' }
+          : null;
+      },
+    } as Deps['oauth'],
     shareLinks: {
       async list(id) {
         shareCalls.push('list');
@@ -255,6 +267,7 @@ function setup(
     resolved,
     answered,
     dataCalls,
+    verified,
   };
 }
 
@@ -282,14 +295,42 @@ async function callTool(app: Hono, name: string, args: Record<string, unknown>) 
   return { result, json: text.startsWith('{') ? JSON.parse(text) : { text } };
 }
 
-test('401 without a token or with a bad one', async () => {
+test('401 without a token points to the resource metadata', async () => {
   const { app } = setup();
-  for (const token of [null, 'aa_bad']) {
+  const res = await rpc(app, 'tools/list', {}, null);
+  assert.equal(res.status, 401);
+  assert.equal(res.headers.get('www-authenticate'), CHALLENGE);
+  assert.equal((await res.json()).error, 'unauthorized');
+});
+
+test('401 with a bad token says invalid_token', async () => {
+  const { app } = setup();
+  for (const token of ['aa_bad', 'aat_bad', 'eyJhbGciOi.x.y']) {
     const res = await rpc(app, 'tools/list', {}, token);
     assert.equal(res.status, 401);
-    assert.equal(res.headers.get('www-authenticate'), 'Bearer realm="agent-artifacts"');
-    assert.equal((await res.json()).error, 'unauthorized');
+    assert.equal(res.headers.get('www-authenticate'), `${CHALLENGE}, error="invalid_token"`);
   }
+});
+
+test('an OAuth access token works, checked for this resource, and publishes as its client', async () => {
+  const { app, published, verified } = setup();
+  const list = await rpc(app, 'tools/list', {}, OAUTH_TOKEN);
+  assert.equal(list.status, 200);
+  assert.deepEqual(verified.at(-1), [OAUTH_TOKEN, 'https://app.test/mcp']);
+  const res = await rpc(
+    app,
+    'tools/call',
+    { name: 'publish_artifact', arguments: { title: 'T', content: '# x', format: 'markdown' } },
+    OAUTH_TOKEN,
+  );
+  assert.equal(res.status, 200);
+  assert.equal(published.at(-1)?.publishedBy, 'Claude Code');
+});
+
+test('a PAT is never checked as an OAuth token', async () => {
+  const { app, verified } = setup();
+  await rpc(app, 'tools/list', {}, 'aa_bad');
+  assert.equal(verified.length, 0);
 });
 
 test('ignores X-authentik headers', async () => {

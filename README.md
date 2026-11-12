@@ -6,10 +6,40 @@ An image artifact is one PNG, JPEG, GIF, WebP or SVG file. Its bytes must match 
 
 One process serves two hosts, picked by the `Host` header:
 
-- **App host** (`APP_ORIGIN`): the web UI, behind Authentik forward auth, which trusts the `X-authentik-email` header. Forward auth is skipped on `/mcp`, the MCP endpoint (streamable HTTP), where agents authenticate with personal access tokens (`Authorization: Bearer aa_...`), and on `/healthz`.
+- **App host** (`APP_ORIGIN`): the web UI, behind Authentik forward auth, which trusts the `X-authentik-email` header. Forward auth is skipped on `/mcp`, the MCP endpoint (streamable HTTP), where agents sign in with OAuth or use a personal access token (see Signing in to MCP), on the public OAuth endpoints, and on `/healthz`.
 - **Content host** (`CONTENT_ORIGIN`): serves the artifact files from signed URLs and public share links, with no forward auth and no cookies. An artifact's HTML and scripts run on a different origin than the app, so they can't reach the app's session or API. The entry of a Markdown, code or image artifact is shown as a page; add `?raw=1` for the file itself.
 
 Artifacts are stored in a SQLite database and in files under `DATA_DIR`.
+
+## Signing in to MCP
+
+MCP clients (Claude Code, OpenCode, Codex) sign in with OAuth: add the MCP URL and the client opens the app in the browser, where you allow it. Personal access tokens (`aa_...`, made on the Connections page) stay for clients without OAuth. `/mcp` takes either as `Authorization: Bearer ...`; without a valid one it answers 401 with `WWW-Authenticate: Bearer resource_metadata="<APP_ORIGIN>/.well-known/oauth-protected-resource"` (and `error="invalid_token"` when a token was sent). A publish over OAuth is by the client's name, such as "Claude Code".
+
+MCP clients expect dynamic client registration, which Authentik's OAuth provider doesn't reliably offer, so the app is its own small OAuth 2.1 authorization server (`src/core/oauth.ts`, `src/oauth/`). Its consent page sits behind the same forward auth as the UI, so the sign-in is still Authentik's.
+
+**Public endpoints** (no forward auth; nothing here reads `X-authentik-*`):
+
+| Method | Path                                                                                     | Purpose                                                                                                                                                                                                                                                                                                              |
+| ------ | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/.well-known/oauth-protected-resource`, `/.well-known/oauth-protected-resource/mcp`     | Resource metadata (RFC 9728): resource `<APP_ORIGIN>/mcp`, `authorization_servers: [APP_ORIGIN]`                                                                                                                                                                                                                     |
+| GET    | `/.well-known/oauth-authorization-server`, `/.well-known/oauth-authorization-server/mcp` | Authorization server metadata (RFC 8414). The issuer is `APP_ORIGIN`; the `/mcp` variant is for clients that insert the resource path                                                                                                                                                                                |
+| POST   | `/oauth/register`                                                                        | Dynamic client registration (RFC 7591): public clients only (`token_endpoint_auth_method: none`, whatever was asked). Redirect URIs must be `https`, or `http` on `127.0.0.1`, `localhost` or `[::1]`. Rate limited to a burst of 10, then one a minute, per client IP, and a burst of 60, then 10 a minute, overall |
+| POST   | `/oauth/token`                                                                           | `authorization_code` with PKCE, and `refresh_token`. Form-encoded, errors as RFC 6749 JSON. Rate limited to a burst of 30, then 30 a minute, per client IP                                                                                                                                                           |
+
+**Behind forward auth:** `GET /oauth/authorize` checks the request and shows the consent page (the client's self-chosen name, where the browser goes back to, the signed-in user). `POST /oauth/authorize` is the Allow or Deny form, behind the UI's Origin check; it checks everything again and redirects back with `code` or `error`, `state` and `iss` (RFC 9207). An unknown client or a `redirect_uri` that wasn't registered gets an error page instead of a redirect. The consent page widens `form-action` to the client's origin, because browsers apply it to the redirect after the POST.
+
+**Rules:**
+
+- PKCE with `S256` is required; `plain` or no challenge is refused.
+- `redirect_uri` must match a registered one exactly, except that a loopback URI may use any port (RFC 8252 7.3). If the authorization request had one, the token request must repeat it.
+- `resource` (RFC 8707) must be `<APP_ORIGIN>/mcp` (an upper-case scheme or host, or a trailing slash, is accepted). Left out, the token is still issued for `/mcp` only, and `/mcp` accepts only tokens issued for it.
+- Codes are single-use and live 60 seconds; a wrong `code_verifier` spends the code too. A reused code revokes the grant it made.
+- Access tokens (`aat_...`) live an hour. Refresh tokens (`aar_...`) live 30 days and rotate on every use; presenting a rotated one again revokes the whole grant (the client has to sign in again).
+- Codes and tokens are random 256-bit values stored only as SHA-256 hashes, compared in constant time, and never logged.
+- A grant is one sign-in of a client by the user. Signing in again with the same client replaces its earlier grant. The Connections page (`/settings/connections`) lists grants (client, signed in, last used) above the personal access tokens, and revokes them with all their tokens.
+- The hourly purge drops expired codes and tokens, ended grants, and registered clients that nobody used for 30 days.
+
+Tables: `oauth_clients`, `oauth_grants`, `oauth_codes`, `oauth_tokens` (access and refresh), from migration step 8 (after the asks and version line count steps).
 
 ## Search
 
@@ -135,3 +165,5 @@ The content host needs a second hostname. `.env.example` uses `content.localhost
 CI pushes `ghcr.io/tim-brand/agent-artifacts` (`:latest` and `:<short sha>`) after a green build on `master`, then restarts the deployment and waits for it. Without the `KUBE_DEPLOY_TOKEN` and `KUBE_DEPLOY_CA_CERT` repository secrets it skips the restart.
 
 The image runs as `node`, listens on port 3000 with health at `/healthz` (send the app host as `Host`), and writes only to `/data`, which needs a persistent volume. SQLite allows one writer, so run a single replica. The manifests, ingress and Authentik setup are in the home-infra repo, in `env/talos-cluster/agent-artifacts`.
+
+The ingress leaves exactly these paths without forward auth, with `X-authentik-*` headers blanked: `/mcp`, `/healthz` and the public OAuth endpoints above (`PUBLIC_OAUTH_PATHS` in `src/oauth/rules.ts`). `/oauth/authorize` stays behind forward auth.
