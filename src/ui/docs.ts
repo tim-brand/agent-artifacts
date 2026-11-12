@@ -123,6 +123,8 @@ ${block('api', api)}
 <p>Calls reject with an <code>Error</code> that has a <code>code</code>: <code>no_shell</code>, <code>forbidden</code> (not declared), <code>not_found</code>, <code>invalid_input</code>, <code>too_large</code>, <code>rate_limited</code> or <code>unavailable</code>.</p>
 <p><code>subscribe</code> first calls back with every document (<code>reset: true</code>), then, every 3 seconds while the tab is visible, with the documents that changed and the ids that were deleted. On <code>reset</code>, drop what you had. It resolves to a function that stops it.</p>
 <p>The runtime is defined before the page's own scripts run, when the file starts with <code>&lt;!doctype html&gt;</code>. Without a doctype, use it from <code>DOMContentLoaded</code>.</p>
+<h2>Every HTML page has it</h2>
+<p>In the app, <code>window.openArtifacts</code> is defined for every HTML page, with or without capabilities: <code>theme</code> and <code>onTheme</code> work for all of them. Opened from a file or in its own tab, a page may not have it at all. So write the page to work both ways, and don't run code from the runtime branch that needs setup the rest of your script hasn't done yet (a canvas size, state). To test without the app, define a stub before your script: <code>window.openArtifacts = { theme: 'dark', onTheme() {}, ready: Promise.resolve() }</code>.</p>
 <h2>Outside the app</h2>
 <p>Opened in its own tab, or through a public link, the page has no app to talk to: <code>ready</code> resolves at once, <code>viewer</code> is null, and <code>db</code> calls reject with <code>{ code: 'no_shell' }</code>. Say so on the page instead of failing.</p>
 <h2>Limits</h2>
