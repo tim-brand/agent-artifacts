@@ -106,6 +106,8 @@ export type LibraryFilter = {
   shared?: boolean;
   /** Has an open comment thread. */
   openComments?: boolean;
+  /** Has an unanswered ask in an open thread. */
+  openAsks?: boolean;
 };
 
 export type LibrarySort = 'updated' | 'title';
@@ -127,6 +129,8 @@ export type LibraryItem = {
   publicLinks: number;
   /** Open comment threads. */
   openComments: number;
+  /** Unanswered asks in open threads. */
+  openAsks: number;
 };
 
 export type LibrarySummary = {
@@ -136,6 +140,8 @@ export type LibrarySummary = {
   trash: number;
   /** Publishers of the latest versions, most artifacts first. */
   agents: { name: string; count: number }[];
+  /** Unanswered asks in open threads of artifacts that aren't deleted. */
+  openAsks: number;
 };
 
 export type SearchQuery = {
@@ -199,6 +205,36 @@ export type AnchorInput =
   | { kind: 'note' }
   | { kind: 'text'; exact: string; prefix?: string; suffix?: string };
 
+export type AskOption = {
+  /** 1 to 64 characters of A-Z, a-z, 0-9, _ and -; unique within the ask. */
+  id: string;
+  label: string;
+  detail?: string;
+};
+
+/** What an agent gives to ask the owner a question with fixed options. */
+export type AskInput = {
+  question: string;
+  /** 2 to 6. */
+  options: AskOption[];
+  /** The option the agent suggests, and why. */
+  recommended?: { optionId: string; why: string };
+};
+
+/**
+ * The owner's choice. Only the web UI's route sets it, with the signed-in user as `by`; there is
+ * no other way to answer, so `typed` is always true.
+ */
+export type AskAnswer = { optionId: string; label: string; by: string; at: string; typed: true };
+
+export type Ask = {
+  question: string;
+  options: AskOption[];
+  recommended: { optionId: string; why: string } | null;
+  /** Null until the owner answers. */
+  answer: AskAnswer | null;
+};
+
 export type Comment = {
   id: string;
   /** The signed-in user's email for typed comments, the token's name for agent comments. */
@@ -207,6 +243,8 @@ export type Comment = {
   typed: boolean;
   body: string;
   createdAt: string;
+  /** Only on a comment that asks the owner a question. */
+  ask?: Ask;
 };
 
 export type Thread = {
@@ -227,8 +265,10 @@ export type CommentStatus = 'open' | 'resolved' | 'all';
 
 export type CommentInput = {
   artifactId: string;
-  /** 1 to 2,000 characters after trimming. */
+  /** 1 to 2,000 characters after trimming. With an ask it may be empty: it becomes the question. */
   body: string;
+  /** Ask the owner to choose. Agents only: refused from a typed author. */
+  ask?: AskInput;
   /** Reply to this thread; omit to start one. */
   threadId?: string;
   /** For a new thread only. Default: a note on the whole artifact. */
@@ -255,6 +295,19 @@ export interface CommentService {
   resolve(threadId: string, resolved: boolean, artifactId?: string): Promise<Thread | null>;
   /** Open threads per artifact id; artifacts without any are left out. */
   openCounts(artifactIds: string[]): Promise<Record<string, number>>;
+  /** Unanswered asks in open threads per artifact id; artifacts without any are left out. */
+  openAskCounts(artifactIds: string[]): Promise<Record<string, number>>;
+  /**
+   * The owner answers an ask, or changes the answer. For the web UI's route only: `by` is the
+   * signed-in user. Null when the comment isn't found, deleted, or on another artifact; not_found
+   * when it has no ask; invalid_input for an option the ask doesn't have or a resolved thread.
+   */
+  answer(
+    artifactId: string,
+    commentId: string,
+    optionId: string,
+    by: string,
+  ): Promise<Thread | null>;
 }
 
 export const COMMENT_LIMITS = {
@@ -263,6 +316,16 @@ export const COMMENT_LIMITS = {
   /** Characters of prefix and of suffix around a text anchor. */
   context: 32,
   threads: 200,
+} as const;
+
+export const ASK_LIMITS = {
+  question: 500,
+  minOptions: 2,
+  maxOptions: 6,
+  optionId: 64,
+  label: 200,
+  detail: 1000,
+  why: 1000,
 } as const;
 
 /** A JSON object; the top level of a stored document. */

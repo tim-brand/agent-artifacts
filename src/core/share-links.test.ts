@@ -173,12 +173,12 @@ test('the migration adds the table to an existing database', async (t) => {
   const id = await publish();
   // Later steps run again too, so their tables go as well.
   db.exec(
-    'DROP TABLE share_links; DROP TABLE comments; DROP TABLE threads; ' +
+    'DROP TABLE share_links; DROP TABLE asks; DROP TABLE comments; DROP TABLE threads; ' +
       'DROP TABLE artifact_data; ALTER TABLE artifacts DROP COLUMN capabilities; ALTER TABLE artifacts DROP COLUMN data_rev; ALTER TABLE artifacts DROP COLUMN data_floor; PRAGMA user_version = 2;',
   );
   const { shareLinks } = reopen();
   const { token } = await shareLinks.create(id);
   assert.equal((await shareLinks.resolve(token))?.version, 1);
   const { user_version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
-  assert.equal(user_version, 5);
+  assert.equal(user_version, 6);
 });

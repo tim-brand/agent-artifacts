@@ -311,7 +311,7 @@ test('the live pages migration runs on an existing database', async (t) => {
   const id = await ctx.publish();
   ctx.withDb((db) => {
     db.exec(
-      'DROP TABLE artifact_data; ALTER TABLE artifacts DROP COLUMN capabilities; ' +
+      'DROP TABLE asks; DROP TABLE artifact_data; ALTER TABLE artifacts DROP COLUMN capabilities; ' +
         'ALTER TABLE artifacts DROP COLUMN data_rev; ALTER TABLE artifacts DROP COLUMN data_floor; ' +
         'PRAGMA user_version = 4',
     );

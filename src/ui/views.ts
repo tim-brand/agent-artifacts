@@ -1,6 +1,8 @@
 import { html, raw } from 'hono/html';
 import {
   type Artifact,
+  type Ask,
+  type AskOption,
   COMMENT_LIMITS,
   type DeletedArtifact,
   type Format,
@@ -100,6 +102,10 @@ const commentsPill = (n: number) =>
   n
     ? html`<span class="pill cmt" title="${plural(n, 'open comment thread')}">${icon('cmt')}${n}</span>`
     : '';
+const asksPill = (n: number) =>
+  n
+    ? html`<span class="pill ask" title="${plural(n, 'ask')} waiting for your answer">${icon('ask')}${n}</span>`
+    : '';
 const livePill = (a: Artifact) =>
   a.capabilities.db ? html`<span class="pill live">${icon('live')}Live</span>` : '';
 const publicPill = (n: number) =>
@@ -109,13 +115,14 @@ const publicPill = (n: number) =>
 
 // ---- Library ----
 
-export type LibraryTab = 'all' | 'live' | 'shared' | 'comments';
-export const LIBRARY_TABS: readonly LibraryTab[] = ['all', 'live', 'shared', 'comments'];
+export type LibraryTab = 'all' | 'live' | 'shared' | 'comments' | 'asks';
+export const LIBRARY_TABS: readonly LibraryTab[] = ['all', 'live', 'shared', 'comments', 'asks'];
 const TAB_LABELS: Record<LibraryTab, string> = {
   all: 'All',
   live: 'Live',
   shared: 'Shared publicly',
   comments: 'Open comments',
+  asks: 'Asks for you',
 };
 
 export type LibraryView = 'grid' | 'list';
@@ -161,7 +168,7 @@ function card(item: LibraryItem, preview: string | null): Html {
   return html`<article class="card">
 ${thumb}
 <h2 class="ctitle">${formatIcon(a.format)}<a class="stretch" href="/a/${encodeURIComponent(a.id)}">${a.title}</a></h2>
-<div class="meta"><span class="agent">${item.agent}</span>${commentsPill(item.openComments)}${livePill(a)}${publicPill(item.publicLinks)}<span class="t">${time(a.updatedAt)}</span></div>
+<div class="meta"><span class="agent">${item.agent}</span>${asksPill(item.openAsks)}${commentsPill(item.openComments)}${livePill(a)}${publicPill(item.publicLinks)}<span class="t">${time(a.updatedAt)}</span></div>
 </article>`;
 }
 
@@ -173,7 +180,7 @@ function row(item: LibraryItem): Html {
   return html`<article class="row">
 ${formatIcon(a.format)}
 <div class="row-main"><a class="ttl stretch" href="/a/${encodeURIComponent(a.id)}">${a.title}</a><div class="sub">${subline(a)}</div></div>
-<div class="row-pills">${commentsPill(item.openComments)}${livePill(a)}${publicPill(item.publicLinks)}</div>
+<div class="row-pills">${asksPill(item.openAsks)}${commentsPill(item.openComments)}${livePill(a)}${publicPill(item.publicLinks)}</div>
 <div class="sub row-agent">${item.agent}</div>
 <div class="sub t">${time(a.updatedAt)}</div>
 </article>`;
@@ -336,6 +343,7 @@ export function artifactPage(opts: {
   ).length;
   const shown = opts.threads.filter((t) => t.version <= v.version);
   const open = shown.filter((t) => !t.resolvedAt);
+  const waiting = unanswered(open);
 
   const caps = a.capabilities;
   const declared = (['db', 'viewer'] as const).filter((k) => caps[k]);
@@ -381,16 +389,16 @@ ${moreMenu}
     opts.viewer ? html` data-viewer="${JSON.stringify(opts.viewer)}"` : ''
   }`;
 
-  const tab = (name: PanelTab, label: string, badge?: number) => {
+  const tab = (name: PanelTab, label: string, badge?: number, asks?: number) => {
     const on = name === opts.panel.tab;
-    return html`<a class="ptab${on ? ' on' : ''}" href="${tabHref(name)}" role="tab" id="tab-${name}" aria-controls="pane-${name}" aria-selected="${String(on)}" data-tab="${name}">${label}${badge ? html`<span class="n">${badge}</span>` : ''}</a>`;
+    return html`<a class="ptab${on ? ' on' : ''}" href="${tabHref(name)}" role="tab" id="tab-${name}" aria-controls="pane-${name}" aria-selected="${String(on)}" data-tab="${name}">${label}${badge ? html`<span class="n">${badge}</span>` : ''}${asks ? html`<span class="n ask" title="${plural(asks, 'ask')} waiting for your answer">${icon('ask')}${asks}</span>` : ''}</a>`;
   };
   const pane = (name: PanelTab, body: Html) =>
     html`<section class="pbody" id="pane-${name}" role="tabpanel" aria-labelledby="tab-${name}" data-pane="${name}"${name === opts.panel.tab ? '' : raw(' hidden')}>${body}</section>`;
 
   const panel = html`<aside class="panel" id="panel" aria-label="Artifact panel"${opts.panel.open ? '' : raw(' hidden')}>
 <div class="ptabs" role="tablist">
-${tab('versions', 'Versions')}${tab('comments', 'Comments', open.length)}${tab('share', 'Share')}${tab('details', 'Details')}
+${tab('versions', 'Versions')}${tab('comments', 'Comments', open.length, waiting)}${tab('share', 'Share')}${tab('details', 'Details')}
 <span class="sp"></span>
 <a class="btn ghost icon sm" href="${tabHref('closed')}" data-panel-close aria-label="Close panel">${icon('x')}</a>
 </div>
@@ -472,7 +480,8 @@ ${t.comments.map((c, i) => {
   const you = c.typed && c.author === user;
   return html`<li class="cmt"><span class="av${c.typed ? '' : ' bot'}" aria-hidden="true">${initials(you ? name : c.author)}</span><div class="cmt-body">
 <div class="who2">${you ? name : c.author}${c.typed ? html`<span class="you">${you ? 'you' : 'typed'}</span>` : html`<span class="agent-tag">agent</span>`}<small>· ${i === 0 && quote ? `v${t.version} · ` : ''}${time(c.createdAt)}</small></div>
-<p class="text">${c.body}</p></div></li>`;
+${c.ask && c.body === c.ask.question ? '' : html`<p class="text">${c.body}</p>`}
+${c.ask ? askCard(a.id, v.version, t, c.id, c.ask, user) : ''}</div></li>`;
 })}
 </ol>
 <form class="reply" method="post" action="${action}">
@@ -495,6 +504,48 @@ ${version}
 <textarea class="box" name="body" rows="3" required maxlength="${COMMENT_LIMITS.body}" placeholder="Comment on v${v.version}, or select text in the page…" aria-label="Comment on version ${v.version}"></textarea>
 <div class="form-end"><button class="btn primary sm" type="submit">Comment</button></div>
 </form>`;
+}
+
+/** Asks without an answer in these threads (pass the open ones). */
+const unanswered = (threads: Thread[]) =>
+  threads.reduce((n, t) => n + t.comments.filter((c) => c.ask && !c.ask.answer).length, 0);
+
+/**
+ * An agent's question as a card: each option is a submit button of one form, which the server
+ * checks against the ask. The question, labels, details and the why are agent text: escaped like
+ * any comment. Answers can change until the thread is resolved.
+ */
+function askCard(
+  artifactId: string,
+  version: number,
+  t: Thread,
+  commentId: string,
+  ask: Ask,
+  user: string,
+): Html {
+  const closed = Boolean(t.resolvedAt);
+  const answer = ask.answer;
+  const action = `/a/${encodeURIComponent(artifactId)}/asks/${encodeURIComponent(commentId)}`;
+  const status = answer
+    ? html`<p class="ask-status done">${icon('check')}<span>Answered by ${answer.by === user ? 'you' : answer.by} · ${time(answer.at)}</span></p>`
+    : html`<p class="ask-status">${closed ? 'Not answered before the thread was resolved' : 'Waiting for your answer'}</p>`;
+  const option = (o: AskOption) => {
+    const rec = ask.recommended?.optionId === o.id ? ask.recommended : null;
+    const on = answer?.optionId === o.id;
+    return html`<button class="ask-opt${on ? ' on' : ''}${rec ? ' rec' : ''}" type="submit" name="optionId" value="${o.id}" aria-pressed="${String(on)}"${closed ? raw(' disabled') : ''}>
+<span class="ask-l1"><span class="ask-label">${o.label}</span>${rec ? html`<span class="tag">Recommended</span>` : ''}${on ? icon('check') : ''}</span>
+${o.detail ? html`<span class="ask-detail">${o.detail}</span>` : ''}
+${rec ? html`<span class="ask-why">${rec.why}</span>` : ''}
+</button>`;
+  };
+  return html`<div class="ask${answer ? ' answered' : ''}" id="ask-${commentId}">
+<p class="ask-q">${icon('ask')}<span>${ask.question}</span></p>
+<form method="post" action="${action}" class="ask-opts">
+<input type="hidden" name="version" value="${version}">
+${ask.options.map(option)}
+</form>
+${status}
+</div>`;
 }
 
 const EXPIRY_CHOICES: [string, string][] = [

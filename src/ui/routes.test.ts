@@ -156,12 +156,14 @@ function fakeDeps(overrides: {
             agent: a.id === 'a1' ? 'Claude <Code>' : 'OpenCode',
             publicLinks: a.id === 'a1' ? 1 : 0,
             openComments: a.id === 'a1' ? 2 : 0,
+            openAsks: a.id === 'a1' ? 1 : 0,
           })),
         nextCursor: query.cursor ? null : 'next-page',
       };
     },
     count: async (filter = {}) => {
       counted.push(filter);
+      if (filter.openAsks) return 1;
       return filter.live ? 0 : filter.shared ? 1 : filter.openComments ? 1 : list.length;
     },
     summary: async () => ({
@@ -171,6 +173,7 @@ function fakeDeps(overrides: {
         { name: 'Claude <Code>', count: 1 },
         { name: 'OpenCode', count: 2 },
       ],
+      openAsks: 2,
     }),
     search: async (query) => {
       searched.push(query);
@@ -213,6 +216,7 @@ function fakeDeps(overrides: {
 
   const added: { input: CommentInput; author: CommentAuthor }[] = [];
   const resolved: [string, boolean, string | undefined][] = [];
+  const answered: [string, string, string, string][] = [];
   const comments: CommentService = {
     list: async (id) =>
       list.some((a) => a.id === id) ? THREADS.filter((t) => t.artifactId === id) : null,
@@ -229,6 +233,14 @@ function fakeDeps(overrides: {
     },
     openCounts: async (ids): Promise<Record<string, number>> =>
       ids.includes('a1') ? { a1: 2 } : {},
+    openAskCounts: async (ids): Promise<Record<string, number>> =>
+      ids.includes('a1') ? { a1: 1 } : {},
+    answer: async (artifactId, commentId, optionId, by) => {
+      answered.push([artifactId, commentId, optionId, by]);
+      if (optionId === 'nope')
+        throw new AppError('invalid_input', 'That is not one of the options');
+      return artifactId === 'a1' && commentId === 'c-ask' ? (THREADS[0] as Thread) : null;
+    },
     ...overrides.comments,
   };
 
@@ -306,6 +318,7 @@ function fakeDeps(overrides: {
     links,
     added,
     resolved,
+    answered,
   };
 }
 
@@ -528,6 +541,7 @@ describe('library', () => {
       { format: 'html', agent: 'OpenCode', live: true },
       { format: 'html', agent: 'OpenCode', shared: true },
       { format: 'html', agent: 'OpenCode', openComments: true },
+      { format: 'html', agent: 'OpenCode', openAsks: true },
     ]);
     assert.match(
       body,
@@ -1245,5 +1259,126 @@ describe('comments', () => {
   it('is not found for a deleted or unknown artifact', async () => {
     const { app } = fakeDeps({ comments: { list: async () => null } });
     assert.equal((await get(app, '/a/a1')).status, 404);
+  });
+});
+
+describe('asks', () => {
+  const askThread = (opts: { answered?: boolean; resolved?: boolean } = {}): Thread => ({
+    ...(THREADS[2] as Thread),
+    id: 'th-ask',
+    version: 1,
+    resolvedAt: opts.resolved ? '2026-01-05T00:00:00.000Z' : null,
+    comments: [
+      {
+        id: 'c-ask',
+        author: 'agent <x>',
+        typed: false,
+        body: 'Which <b>layout</b>?',
+        createdAt: '2026-01-03T00:00:00.000Z',
+        ask: {
+          question: 'Which <b>layout</b>?',
+          options: [
+            { id: 'two', label: 'Two <i>columns</i>', detail: 'Denser <script>x</script>' },
+            { id: 'one', label: 'One column' },
+          ],
+          recommended: { optionId: 'two', why: 'Fits <the> data' },
+          answer: opts.answered
+            ? {
+                optionId: 'one',
+                label: 'One column',
+                by: 'owner@example.com',
+                at: '2026-01-04T00:00:00.000Z',
+                typed: true,
+              }
+            : null,
+        },
+      },
+    ],
+  });
+  const page = async (thread: Thread) => {
+    const { app } = fakeDeps({ comments: { list: async () => [thread] } });
+    return (await get(app, '/a/a1')).text();
+  };
+
+  it('shows an ask as a card of option buttons, escaped, with the recommendation', async () => {
+    const body = await page(askThread());
+    assert.match(body, /<form method="post" action="\/a\/a1\/asks\/c-ask" class="ask-opts">/);
+    assert.ok(body.includes('<span>Which &lt;b&gt;layout&lt;/b&gt;?</span>'));
+    // The body equals the question, so it isn't shown twice.
+    assert.equal(body.match(/Which &lt;b&gt;layout/g)?.length, 1);
+    assert.match(
+      body,
+      /<button class="ask-opt rec" type="submit" name="optionId" value="two" aria-pressed="false">\s*<span class="ask-l1"><span class="ask-label">Two &lt;i&gt;columns&lt;\/i&gt;<\/span><span class="tag">Recommended<\/span><\/span>\s*<span class="ask-detail">Denser &lt;script&gt;x&lt;\/script&gt;<\/span>\s*<span class="ask-why">Fits &lt;the&gt; data<\/span>/,
+    );
+    assert.match(body, /<button class="ask-opt" type="submit" name="optionId" value="one"/);
+    assert.ok(!body.includes('<script>x'));
+    assert.match(body, /Waiting for your answer/);
+    assert.match(body, /<span class="n ask" title="1 ask waiting for your answer">/);
+  });
+
+  it('marks the answer, which can change until the thread is resolved', async () => {
+    const answered = await page(askThread({ answered: true }));
+    assert.match(answered, /value="one" aria-pressed="true">/);
+    assert.match(answered, /value="two" aria-pressed="false">/);
+    assert.match(answered, /Answered by you · <time/);
+    assert.doesNotMatch(answered, /class="n ask"/);
+    assert.doesNotMatch(answered, /disabled/);
+
+    const resolved = await page(askThread({ resolved: true }));
+    assert.equal(resolved.match(/aria-pressed="false" disabled>/g)?.length, 2);
+    assert.match(resolved, /Not answered before the thread was resolved/);
+  });
+
+  it('answers as the signed-in user from the app Origin only, whatever the form says', async () => {
+    const { app, answered } = fakeDeps({});
+    const res = await post(
+      app,
+      '/a/a1/asks/c-ask',
+      { optionId: 'two', version: '2', by: 'agent', typed: '1', answer: 'one' },
+      APP,
+    );
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), '/a/a1/v/2?panel=comments#thread-th-open');
+    assert.deepEqual(answered, [['a1', 'c-ask', 'two', 'owner@example.com']]);
+
+    assert.equal((await post(app, '/a/a1/asks/c-ask', { optionId: 'two' })).status, 403);
+    assert.equal((await post(app, '/a/a1/asks/c-ask', { optionId: 'two' }, CONTENT)).status, 403);
+    assert.equal(answered.length, 1);
+  });
+
+  it('refuses an option the ask does not have, and another artifact or comment', async () => {
+    const { app } = fakeDeps({});
+    const refused = await post(app, '/a/a1/asks/c-ask', { optionId: 'nope' }, APP);
+    assert.equal(refused.status, 400);
+    assert.equal((await post(app, '/a/p1/asks/c-ask', { optionId: 'two' }, APP)).status, 404);
+    assert.equal((await post(app, '/a/a1/asks/c-x', { optionId: 'two' }, APP)).status, 404);
+  });
+
+  it('cannot be created from the comment form', async () => {
+    const { app, added } = fakeDeps({});
+    await post(
+      app,
+      '/a/a1/comments',
+      { body: 'Hi', question: 'Q?', 'ask[question]': 'Q?', ask: '{"question":"Q?"}' },
+      APP,
+    );
+    assert.equal(added.length, 1);
+    assert.ok(!('ask' in (added[0]?.input ?? {})));
+  });
+
+  it('has an "Asks for you" library tab, a sidebar count and a badge on cards', async () => {
+    const { app, browsed } = fakeDeps({});
+    const body = await (await get(app, '/?tab=asks')).text();
+    assert.equal(browsed[0]?.openAsks, true);
+    assert.match(body, /aria-current="page">Asks for you<span class="n">1<\/span><\/a>/);
+    assert.match(
+      body,
+      /<a class="nav on" href="\/\?tab=asks" aria-current="page">.*Asks for you<\/span><span class="n attn">2<\/span><\/a>/,
+    );
+    assert.match(body, /<a class="nav" href="\/">.*Library/);
+    assert.match(body, /<span class="pill ask" title="1 ask waiting for your answer">/);
+
+    const list = await (await get(app, '/?view=list')).text();
+    assert.match(list, /<div class="row-pills"><span class="pill ask"/);
   });
 });

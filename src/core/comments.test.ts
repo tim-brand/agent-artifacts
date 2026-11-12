@@ -228,7 +228,7 @@ test('the comments migration runs on an existing database', async (t) => {
   // Back to the schema before comments, with an artifact in it.
   ctx.withDb((db) => {
     db.exec(
-      'DROP TABLE comments; DROP TABLE threads; ' +
+      'DROP TABLE asks; DROP TABLE comments; DROP TABLE threads; ' +
         'DROP TABLE artifact_data; ALTER TABLE artifacts DROP COLUMN capabilities; ALTER TABLE artifacts DROP COLUMN data_rev; ALTER TABLE artifacts DROP COLUMN data_floor; PRAGMA user_version = 3',
     );
   });

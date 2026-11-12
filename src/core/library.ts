@@ -14,9 +14,14 @@ export type LibraryRow = ArtifactRow & {
   agent: string;
   public_links: number;
   open_comments: number;
+  open_asks: number;
 };
 
 const RESTORED = "' (restored v'";
+
+/** Unanswered asks in open threads, as `FROM … WHERE …` with the thread as t. */
+const OPEN_ASKS = `asks k JOIN comments c ON c.id = k.comment_id JOIN threads t ON t.id = c.thread_id
+  WHERE k.answered_at IS NULL AND t.resolved_at IS NULL`;
 
 /**
  * Every live artifact with what the library filters and shows: the latest version's entry and
@@ -32,7 +37,8 @@ const LIB = `WITH lib AS (
     (SELECT count(*) FROM share_links s WHERE s.artifact_id = a.id AND s.revoked_at IS NULL
       AND (s.expires_at IS NULL OR s.expires_at > :now)) AS public_links,
     (SELECT count(*) FROM threads t WHERE t.artifact_id = a.id AND t.resolved_at IS NULL)
-      AS open_comments
+      AS open_comments,
+    (SELECT count(*) FROM ${OPEN_ASKS} AND t.artifact_id = a.id) AS open_asks
   FROM artifacts a JOIN versions v ON v.artifact_id = a.id AND v.version = a.latest_version
   WHERE a.deleted_at IS NULL
 )`;
@@ -41,7 +47,8 @@ const FILTER = `(:format IS NULL OR format = :format)
   AND (:agent IS NULL OR agent = :agent)
   AND (:live = 0 OR json_extract(capabilities, '$.db') = 1)
   AND (:shared = 0 OR public_links > 0)
-  AND (:comments = 0 OR open_comments > 0)`;
+  AND (:comments = 0 OR open_comments > 0)
+  AND (:asks = 0 OR open_asks > 0)`;
 
 /** Keyset paging per sort: the key of the last row, then its id. */
 const SORTS: Record<LibrarySort, { key: (row: LibraryRow) => string; sql: string }> = {
@@ -64,6 +71,7 @@ const params = (filter: LibraryFilter) => ({
   live: filter.live ? 1 : 0,
   shared: filter.shared ? 1 : 0,
   comments: filter.openComments ? 1 : 0,
+  asks: filter.openAsks ? 1 : 0,
 });
 
 function encodeCursor(sort: LibrarySort, key: string, id: string): string {
@@ -104,6 +112,10 @@ export function createLibrary(db: DatabaseSync, pageLimit: (n?: number) => numbe
     ),
     total: db.prepare('SELECT count(*) AS n FROM artifacts WHERE deleted_at IS NULL'),
     trash: db.prepare('SELECT count(*) AS n FROM artifacts WHERE deleted_at IS NOT NULL'),
+    openAsks: db.prepare(
+      `SELECT count(*) AS n FROM ${OPEN_ASKS}
+       AND t.artifact_id IN (SELECT id FROM artifacts WHERE deleted_at IS NULL)`,
+    ),
   };
 
   return {
@@ -137,6 +149,7 @@ export function createLibrary(db: DatabaseSync, pageLimit: (n?: number) => numbe
         agents: (stmt.agents.all({ now: now() }) as { name: string; count: number }[]).map(
           (row) => ({ name: row.name, count: row.count }),
         ),
+        openAsks: (stmt.openAsks.get() as { n: number }).n,
       };
     },
   };
