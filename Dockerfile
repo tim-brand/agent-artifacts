@@ -25,7 +25,7 @@ COPY package.json ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY src ./src
 
-# The artifact store, the only place the app writes. In the cluster a volume is mounted here; a new
+# The artifact store, the only place the app writes. Mount a volume here; a new
 # named volume copies this ownership. The `node` user comes with the base image.
 RUN mkdir /data && chown node:node /data
 

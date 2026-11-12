@@ -75,7 +75,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const local = isLocalDevelopment(env, config.appOrigin);
   if (config.devUser && !local) {
     throw new ConfigError(
-      'DEV_USER is only for local development (NODE_ENV is not production and APP_ORIGIN is localhost). ' +
+      'DEV_USER is only for local development, and this is not local development (NODE_ENV is production, or APP_ORIGIN is not on localhost). ' +
         'Unset it and put a sign-in proxy in front of the app instead; see the README',
     );
   }

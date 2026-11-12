@@ -56,7 +56,7 @@ To run it for real, the app goes behind a reverse proxy that signs people in. Th
 
 - Never expose the app's port directly. Only the proxy may reach it.
 - The proxy sets the identity header from the signed-in user, and removes any such header that a client sent, on every path and on the content host.
-- `/mcp`, `/healthz` and six public OAuth paths must be reachable without the proxy's sign-in, because agents use tokens there. Everything else on the app host, including `/oauth/authorize`, needs sign-in.
+- `/mcp`, `/healthz` and six public OAuth paths ([listed here](docs/deployment.md#what-the-reverse-proxy-must-do)) must be reachable without the proxy's sign-in, because agents use tokens there. Everything else on the app host, including `/oauth/authorize`, needs sign-in.
 - The content host is a separate hostname with no sign-in and no cookies. The proxy must pass `Host` through unchanged.
 - Set a real `SIGNING_SECRET` (`openssl rand -base64 32`), and use HTTPS.
 - Run one replica, and back up the data directory.

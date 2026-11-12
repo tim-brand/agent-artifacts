@@ -57,6 +57,7 @@ These are environment variables. `pnpm dev` also reads a `.env` file; the image 
 | `DATA_DIR` | no | Where the database and files are kept. Default `./data`, and `/data` in the image. |
 | `AUTH_EMAIL_HEADER` | no | The request header in which the proxy sends the signed-in user's email. Default `X-authentik-email`. Letters, digits and `-` only. |
 | `AUTH_NAME_HEADER` | no | The request header for the user's display name. Default `X-authentik-name`. Optional in practice: without it the email is shown. |
+| `NODE_ENV` | no | `production` turns local development off. The image sets it. |
 | `DEV_USER` | no | Local development only: the user everyone is signed in as when no identity header is present. The app refuses to start with it outside local development. |
 
 **Local development** means: `NODE_ENV` is not `production`, and the host name of `APP_ORIGIN` is `localhost`, a name that ends in `.localhost`, `127.0.0.1` or `[::1]`. Anywhere else, `DEV_USER` and a `SIGNING_SECRET` that starts with `change-me` make the app refuse to start.
@@ -129,7 +130,7 @@ Notes:
 | `PORT must be a port number` | Use an integer from 0 to 65535. |
 | `APP_ORIGIN must be an origin such as https://artifacts.example.com` (same for `CONTENT_ORIGIN`) | Give a full origin with scheme. |
 | `AUTH_EMAIL_HEADER must be an HTTP header name (letters, digits and - only)` (same for `AUTH_NAME_HEADER`) | Use a plain header name. |
-| `DEV_USER is only for local development (NODE_ENV is not production and APP_ORIGIN is localhost). Unset it and put a sign-in proxy in front of the app instead; see the README` | Remove `DEV_USER`. |
+| `DEV_USER is only for local development, and this is not local development (NODE_ENV is production, or APP_ORIGIN is not on localhost). Unset it and put a sign-in proxy in front of the app instead; see the README` | Remove `DEV_USER`. |
 | `SIGNING_SECRET is still the placeholder from .env.example. Make one with: openssl rand -base64 32` | Make a real secret. |
 | `APP_ORIGIN and CONTENT_ORIGIN must be different hosts` | Give the content host its own hostname. |
 
