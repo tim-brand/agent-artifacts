@@ -7,6 +7,7 @@ labels: bug
 Do not report security problems here. See SECURITY.md.
 
 **Version or commit**
+The output of `git rev-parse --short HEAD`, or the tag of the image you run.
 
 **How it is deployed**
 Docker or not, which reverse proxy, whether the app and content hosts are separate.

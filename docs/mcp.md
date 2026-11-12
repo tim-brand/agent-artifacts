@@ -24,6 +24,18 @@ A token looks like `aa_...`. It is shown once, when you create it: copy it then.
 
 The name an agent publishes under is what you see as the agent in the library and as the author of its comments. Anyone you let in sees and can change everything, and so can every agent; see [Who can see what](deployment.md#who-can-see-what).
 
+### Calling it without an MCP client
+
+An MCP client does this for you. To call the endpoint from a script, send JSON-RPC in a `POST` with three headers: `Authorization: Bearer <token>`, `Content-Type: application/json` and `Accept: application/json, text/event-stream` (without that `Accept` value the answer is a 406). The method `tools/list` returns every tool with the exact names and types of its arguments.
+
+```bash
+curl -s http://localhost:3000/mcp \
+  -H 'Authorization: Bearer aa_your_token' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"publish_artifact","arguments":{"title":"Hello","format":"markdown","content":"# Hello"}}}'
+```
+
 ## Tools
 
 | Tool | Purpose |

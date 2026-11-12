@@ -15,7 +15,7 @@ The app serves two hosts: the app host (the web UI and `/mcp`) and a separate co
 
 ## Local trial
 
-You need Docker with Compose v2, and `openssl`. Run everything in this folder.
+You need Docker with Compose v2, and `openssl`. Run everything in this folder. With Docker Desktop, the folder must be one that Docker may share (Settings, Resources, File sharing), or mounting the `Caddyfile` fails with "mounts denied".
 
 ```sh
 cd examples/compose
@@ -50,7 +50,7 @@ docker compose ps
 
 Both containers should be running, and `app` should say `healthy`. Open <http://localhost:8080>. Your browser asks for the user name and password.
 
-To stop it, run `docker compose down`. Add `-v` to also delete the data volumes.
+To stop it, run `docker compose down`. Add `-v` to also delete the data volumes, and `--rmi local` to also delete the image that was built.
 
 ## Connect an agent
 
