@@ -1,7 +1,17 @@
 {
   "name": "agent-artifacts",
   "version": "0.0.0",
+  "description": "A self-hosted place where AI agents publish artifacts over MCP, and people view, comment on and share them in a web UI.",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tim-brand/agent-artifacts.git"
+  },
+  "homepage": "https://github.com/tim-brand/agent-artifacts",
+  "bugs": {
+    "url": "https://github.com/tim-brand/agent-artifacts/issues"
+  },
   "type": "module",
   "packageManager": "pnpm@10.34.9",
   "engines": {

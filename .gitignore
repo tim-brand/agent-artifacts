@@ -11,3 +11,7 @@ coverage/
 .idea/
 .vscode/
 *.log
+
+# Local notes for one checkout, never committed
+AGENTS.local.md
+CLAUDE.local.md
