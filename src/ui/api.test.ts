@@ -178,7 +178,7 @@ test('the artifact page gives the frame its id and capabilities, and the viewer 
     page,
     /data-viewer="\{&quot;email&quot;:&quot;owner@example\.com&quot;,&quot;name&quot;:&quot;The &lt;Owner&gt;&quot;\}"/,
   );
-  assert.match(page, /live: db, viewer/);
+  assert.match(page, /title="Live page: db, viewer"/);
 
   const dbOnly = await publish({ db: true });
   const other = await (await request('GET', `/a/${dbOnly}`)).text();

@@ -95,6 +95,49 @@ export type ListQuery = {
   cursor?: string;
 };
 
+/** What the web UI's library shows; every filter given must hold. */
+export type LibraryFilter = {
+  format?: Format;
+  /** Who published the latest version, without a " (restored v<n>)" suffix. */
+  agent?: string;
+  /** Live pages: the artifact declares the db capability. */
+  live?: boolean;
+  /** Has a public link that isn't revoked or expired. */
+  shared?: boolean;
+  /** Has an open comment thread. */
+  openComments?: boolean;
+};
+
+export type LibrarySort = 'updated' | 'title';
+
+export type LibraryQuery = LibraryFilter & {
+  /** Default 'updated': newest updatedAt first. 'title': A to Z, case-insensitive. */
+  sort?: LibrarySort;
+  limit?: number; // default 20, max 100
+  cursor?: string;
+};
+
+export type LibraryItem = {
+  artifact: Artifact;
+  /** The latest version's entry file. */
+  entry: string;
+  /** Who published the latest version, as in LibraryFilter.agent. */
+  agent: string;
+  /** Public links that aren't revoked or expired. */
+  publicLinks: number;
+  /** Open comment threads. */
+  openComments: number;
+};
+
+export type LibrarySummary = {
+  /** Artifacts that aren't deleted. */
+  total: number;
+  /** Artifacts in the trash. */
+  trash: number;
+  /** Publishers of the latest versions, most artifacts first. */
+  agents: { name: string; count: number }[];
+};
+
 export type SearchQuery = {
   /** Plain words; FTS syntax in it is matched as text. The last word also matches as a prefix. */
   query: string;
@@ -121,6 +164,12 @@ export interface ArtifactService {
   ): Promise<{ bytes: Uint8Array; contentType: string } | null>;
   /** Newest updatedAt first; deleted artifacts are left out. */
   list(query?: ListQuery): Promise<Page<Artifact>>;
+  /** The web UI's library: filtered, sorted, with what its cards show. Deleted ones left out. */
+  browse(query?: LibraryQuery): Promise<Page<LibraryItem>>;
+  /** How many artifacts browse() would list with this filter. */
+  count(filter?: LibraryFilter): Promise<number>;
+  /** Counts for the web UI's sidebar. */
+  summary(): Promise<LibrarySummary>;
   /** Full-text search over title, description and the latest version's text, best match first. */
   search(query: SearchQuery): Promise<Page<SearchHit>>;
   /** Newest first. Null when the artifact doesn't exist. */

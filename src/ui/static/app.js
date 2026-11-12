@@ -1,22 +1,157 @@
 // The web UI's client code. Served from 'self' (script-src 'self'), so it can grow without the CSP
 // changing. Every page loads it; each part does nothing when its elements are missing.
+// Everything works without it: it only saves reloads and adds keyboard shortcuts.
 (() => {
-  // Copy buttons ([data-copy] = id of the element to copy) and confirm prompts (form[data-confirm]).
+  const root = document.documentElement;
+  root?.classList.add('js');
+  const narrow = () => window.matchMedia?.('(max-width: 900px)').matches;
+
+  /** Preferences live in cookies, so the server renders them without a flash. */
+  const remember = (name, value) => {
+    const secure = location.protocol === 'https:' ? '; Secure' : '';
+    // biome-ignore lint/suspicious/noDocumentCookie: the Cookie Store API isn't in every browser yet
+    document.cookie = `${name}=${value}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`;
+  };
+
+  // Menus (<details class="menu">): one open at a time, closed by a click elsewhere or Escape.
+  const menus = () => document.querySelectorAll('details.menu[open]');
+  const closeMenus = (except) => {
+    for (const menu of menus()) if (menu !== except) menu.open = false;
+  };
+  const side = document.getElementById('side');
+  const toggleSide = (open) => {
+    if (!side) return;
+    side.classList.toggle('open', open);
+    document.querySelector('[data-menu]')?.setAttribute('aria-expanded', String(open));
+  };
+
   document.addEventListener('click', (e) => {
-    const button = e.target.closest?.('[data-copy]');
-    const target = button && document.getElementById(button.dataset.copy);
-    if (!target) return;
-    navigator.clipboard.writeText(target.textContent).then(() => {
-      button.textContent = 'Copied';
-      setTimeout(() => {
-        button.textContent = 'Copy';
-      }, 1500);
-    });
+    const target = e.target;
+    closeMenus(target.closest?.('details.menu'));
+
+    // Copy buttons: [data-copy] is the id of the element to copy.
+    const button = target.closest?.('[data-copy]');
+    const source = button && document.getElementById(button.dataset.copy);
+    if (source) {
+      navigator.clipboard.writeText(source.textContent).then(() => {
+        button.textContent = 'Copied';
+        setTimeout(() => {
+          button.textContent = 'Copy';
+        }, 1500);
+      });
+      return;
+    }
+    // The sidebar's menu button on narrow screens.
+    if (target.closest?.('[data-menu]')) {
+      e.preventDefault();
+      toggleSide(!side?.classList.contains('open'));
+      return;
+    }
+    // A thread's Reply button first opens its reply box.
+    const reply = target.closest?.('[data-reply]');
+    if (reply?.form && !reply.form.classList.contains('replying')) {
+      e.preventDefault();
+      reply.form.classList.add('replying');
+      reply.form.elements.namedItem('body')?.focus();
+      return;
+    }
+    panelClick(e);
   });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeMenus();
+      toggleSide(false);
+      return;
+    }
+    // "/" focuses the search box, unless the reader is typing somewhere.
+    const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
+    if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const search = document.querySelector('[data-search]');
+      if (search) {
+        e.preventDefault();
+        search.focus();
+        search.select();
+      }
+    }
+  });
+
   document.addEventListener('submit', (e) => {
     const message = e.target.dataset?.confirm;
-    if (message && !confirm(message)) e.preventDefault();
+    if (message && !confirm(message)) {
+      e.preventDefault();
+      return;
+    }
+    if (e.target.matches?.('[data-theme-form]') && e.submitter?.value) {
+      e.preventDefault();
+      setTheme(e.submitter.value);
+    }
   });
+
+  // Theme: light, dark or system. The server reads the cookie; the frame hears it over its port.
+  const media = window.matchMedia?.('(prefers-color-scheme: dark)');
+  const theme = () => root?.dataset?.theme || (media?.matches ? 'dark' : 'light');
+  const themeListeners = [];
+  const setTheme = (choice) => {
+    if (!['light', 'dark', 'system'].includes(choice)) return;
+    remember('aa_theme', choice);
+    if (choice === 'system') delete root.dataset.theme;
+    else root.dataset.theme = choice;
+    for (const b of document.querySelectorAll('[data-theme-form] button[name="theme"]')) {
+      b.setAttribute('aria-pressed', String(b.value === choice));
+    }
+    for (const listener of themeListeners) listener();
+  };
+  media?.addEventListener?.('change', () => {
+    for (const listener of themeListeners) listener();
+  });
+
+  // The artifact page's side panel: tabs are links (?panel=<tab>), shown here without a reload.
+  const panel = document.getElementById('panel');
+  const vbody = document.querySelector('.vbody');
+  const panelToggle = document.querySelector('[data-panel-toggle]');
+  let activeTab = document.querySelector('[data-tab][aria-selected="true"]')?.dataset.tab;
+  const setUrl = (value) => {
+    history.replaceState(null, '', `${location.pathname}?panel=${value}`);
+  };
+  const openPanel = (open) => {
+    if (!panel) return;
+    panel.hidden = !open;
+    vbody?.classList.toggle('closed', !open);
+    panelToggle?.setAttribute('aria-expanded', String(open));
+    remember('aa_panel', open ? activeTab : 'closed');
+    setUrl(open ? activeTab : 'closed');
+  };
+  const showTab = (name) => {
+    if (!panel) return;
+    activeTab = name;
+    for (const tab of document.querySelectorAll('[data-tab]')) {
+      const on = tab.dataset.tab === name;
+      tab.classList.toggle('on', on);
+      tab.setAttribute('aria-selected', String(on));
+    }
+    for (const pane of document.querySelectorAll('[data-pane]')) {
+      pane.hidden = pane.dataset.pane !== name;
+    }
+    openPanel(true);
+    if (narrow()) panel.scrollIntoView({ block: 'start' });
+  };
+  const panelClick = (e) => {
+    if (!panel) return;
+    const link = e.target.closest?.('[data-tab], [data-tab-link]');
+    if (link) {
+      e.preventDefault();
+      closeMenus();
+      showTab(link.dataset.tab ?? link.dataset.tabLink);
+      if (link.dataset.tabLink === 'details') document.querySelector('#rename input')?.focus();
+    } else if (e.target.closest?.('[data-panel-close]')) {
+      e.preventDefault();
+      openPanel(false);
+    } else if (e.target.closest?.('[data-panel-toggle]')) {
+      e.preventDefault();
+      openPanel(panel.hidden);
+    }
+  };
 
   // The frame bridge: messages between this page and the artifact iframe, which runs untrusted code.
   // A sandboxed frame's origin is "null", so a message is only taken from the iframe's own window,
@@ -38,16 +173,12 @@
 
   // Comments.
   const LIMITS = { exact: 2000, context: 32, quotes: 200 };
-  const panel = document.getElementById('comments');
   const form = document.getElementById('new-comment');
   const selectButton = document.getElementById('comment-on-selection');
   const quoteBox = document.getElementById('new-quote');
   const quoteText = document.getElementById('new-quote-text');
   const field = (name) => form?.elements.namedItem(name);
 
-  if (panel && window.matchMedia?.('(max-width: 60rem)').matches && !location.hash) {
-    panel.open = false;
-  }
   const target = location.hash && document.getElementById(location.hash.slice(1));
   const resolved = target?.closest?.('details.resolved');
   if (resolved) resolved.open = true;
@@ -80,7 +211,7 @@
     if (!selection) return;
     setQuote(selection);
     selectButton.hidden = true;
-    if (panel) panel.open = true;
+    if (activeTab !== 'comments' || panel?.hidden) showTab('comments');
     field('body').focus();
   });
   document.getElementById('new-quote-clear')?.addEventListener('click', () => setQuote(null));
@@ -122,8 +253,6 @@
   };
   const capabilities = json(frame?.dataset.capabilities, {});
   const viewer = json(frame?.dataset.viewer, null);
-  const media = window.matchMedia?.('(prefers-color-scheme: dark)');
-  const theme = () => (media?.matches ? 'dark' : 'light');
   const DOC_ID = /^[A-Za-z0-9_-]{1,128}$/;
   let channel = null;
 
@@ -205,9 +334,8 @@
     frame.contentWindow.postMessage({ type: 'aa:port' }, '*', [channel.port2]);
     port.postMessage({ type: 'init', theme: theme(), viewer: capabilities.viewer ? viewer : null });
   };
-  media?.addEventListener?.('change', () => {
-    channel?.port1.postMessage({ type: 'theme', theme: theme() });
-  });
+  // The theme as the app shows it: the reader's choice, or the system's.
+  themeListeners.push(() => channel?.port1.postMessage({ type: 'theme', theme: theme() }));
 
   // The bridge says when it is listening. The frame may also have loaded before this script ran,
   // so ask it to say so again.

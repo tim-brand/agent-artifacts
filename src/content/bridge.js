@@ -303,6 +303,11 @@
       if (to - from < node.data.length) node.splitText(to - from);
       const mark = document.createElement('mark');
       mark.setAttribute(MARK, '');
+      // Set through the CSSOM, which a page's CSP allows where a style attribute would be blocked.
+      mark.style.background = 'rgba(231, 180, 79, 0.28)';
+      mark.style.borderBottom = '2px solid #e7b44f';
+      mark.style.color = 'inherit';
+      mark.style.padding = '0 1px';
       node.replaceWith(mark);
       mark.append(node);
     }
