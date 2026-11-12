@@ -144,6 +144,20 @@ const MIGRATIONS: Migration[] = [
   ) WITHOUT ROWID;
   CREATE INDEX artifact_data_by_rev ON artifact_data (artifact_id, rev);
   `,
+
+  // Asks: a comment by an agent with a question and fixed options (JSON). The answer columns are
+  // only ever written by the web UI's answer route. ON DELETE CASCADE: the purge takes them.
+  `
+  CREATE TABLE asks (
+    comment_id TEXT PRIMARY KEY REFERENCES comments (id) ON DELETE CASCADE,
+    question TEXT NOT NULL,
+    options_json TEXT NOT NULL,
+    recommended_json TEXT,
+    answer_option TEXT,
+    answered_by TEXT,
+    answered_at TEXT
+  ) WITHOUT ROWID;
+  `,
 ];
 
 export function openDb(dataDir: string, blobs: BlobStore): DatabaseSync {

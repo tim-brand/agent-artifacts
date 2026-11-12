@@ -361,6 +361,11 @@ a.pill:hover {
   background: var(--warning-soft);
   color: var(--warning);
 }
+/* An ask waits for the owner: solid, so it stands out from the soft pills. */
+.pill.ask {
+  background: var(--accent);
+  color: var(--surface);
+}
 .badge {
   display: inline-block;
   font-size: 11px;
@@ -620,6 +625,15 @@ a.pill:hover {
   margin-left: auto;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+.nav .n.attn {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--surface);
 }
 .nav.on {
   background: var(--surface);
@@ -1285,6 +1299,18 @@ iframe.artifact {
   padding: 0 5px;
   font-weight: 500;
 }
+/* The tabs fill the panel; make room for the ask badge so the close button stays in view. */
+.ptabs:has(.n.ask) .ptab {
+  padding: 0 6px;
+}
+.ptab .n.ask {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: -2px;
+  background: var(--accent);
+  color: var(--surface);
+}
 .pbody {
   flex: 1;
   overflow: auto;
@@ -1471,6 +1497,107 @@ iframe.artifact {
 .agent-tag {
   color: var(--text-2);
   background: var(--sunken);
+}
+
+/* An agent's ask: the question, then one button per option. */
+.ask {
+  margin-top: 6px;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--divider);
+}
+.ask-q {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.ask-q .ic {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+.ask-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+.ask-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ask-opt:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+.ask-opt.rec {
+  border-color: var(--accent);
+}
+.ask-opt.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.ask-opt:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+.ask-l1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ask-label {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.ask-l1 .ic {
+  margin-left: auto;
+  color: var(--accent);
+  flex: none;
+}
+.ask-detail,
+.ask-why {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ask-why {
+  color: var(--accent);
+}
+.ask-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ask-status.done {
+  color: var(--success);
+}
+.ask-status .ic {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.ptab .n.ask .ic {
+  width: 11px;
+  height: 11px;
 }
 .reply {
   margin: 10px 0 0;

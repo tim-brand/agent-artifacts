@@ -167,6 +167,7 @@ test('summary counts the library, the trash and the agents', async (t) => {
       { name: 'OpenCode', count: 2 },
       { name: 'Claude', count: 2 },
     ].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())),
+    openAsks: 0,
   });
   assert.deepEqual(await titles(core, { agent: 'Claude' }), ['Banana', 'notes']);
 });

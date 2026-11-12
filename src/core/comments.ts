@@ -3,6 +3,10 @@ import {
   type Anchor,
   type AnchorInput,
   AppError,
+  ASK_LIMITS,
+  type Ask,
+  type AskInput,
+  type AskOption,
   COMMENT_LIMITS,
   type Comment,
   type CommentService,
@@ -29,13 +33,43 @@ type CommentRow = {
   body: string;
   created_at: string;
 };
+type AskRow = {
+  comment_id: string;
+  question: string;
+  options_json: string;
+  recommended_json: string | null;
+  answer_option: string | null;
+  answered_by: string | null;
+  answered_at: string | null;
+};
 
-const toComment = (row: CommentRow): Comment => ({
+function toAsk(row: AskRow): Ask {
+  const options = JSON.parse(row.options_json) as AskOption[];
+  const chosen = options.find((o) => o.id === row.answer_option);
+  return {
+    question: row.question,
+    options,
+    recommended: row.recommended_json ? JSON.parse(row.recommended_json) : null,
+    answer:
+      chosen && row.answered_by && row.answered_at
+        ? {
+            optionId: chosen.id,
+            label: chosen.label,
+            by: row.answered_by,
+            at: row.answered_at,
+            typed: true,
+          }
+        : null,
+  };
+}
+
+const toComment = (row: CommentRow, ask?: AskRow): Comment => ({
   id: row.id,
   author: row.author,
   typed: row.typed === 1,
   body: row.body,
   createdAt: row.created_at,
+  ...(ask ? { ask: toAsk(ask) } : {}),
 });
 
 const collapse = (text: string) => text.replace(/\s+/g, ' ');
@@ -71,6 +105,66 @@ export function cleanAnchor(anchor: AnchorInput | undefined): Anchor {
   return { kind: 'text', exact, prefix, suffix };
 }
 
+const OPTION_ID = new RegExp(`^[A-Za-z0-9_-]{1,${ASK_LIMITS.optionId}}$`);
+
+/** Trimmed text of 1 to `max` characters, or `name` is refused. */
+function text(value: unknown, max: number, name: string): string {
+  const result = typeof value === 'string' ? value.trim() : '';
+  if (!result || result.length > max) {
+    throw new AppError('invalid_input', `${name} is 1 to ${max} characters`);
+  }
+  return result;
+}
+
+/**
+ * A fresh ask from only the fields an ask has: anything else in the input (such as an `answer`) is
+ * dropped, so no caller can store an answer with the question.
+ */
+export function cleanAsk(ask: AskInput): Omit<Ask, 'answer'> {
+  if (!ask || typeof ask !== 'object') throw new AppError('invalid_input', 'ask is an object');
+  const question = text(ask.question, ASK_LIMITS.question, 'ask.question');
+  const given = Array.isArray(ask.options) ? ask.options : [];
+  if (given.length < ASK_LIMITS.minOptions || given.length > ASK_LIMITS.maxOptions) {
+    throw new AppError(
+      'invalid_input',
+      `ask.options has ${ASK_LIMITS.minOptions} to ${ASK_LIMITS.maxOptions} options`,
+    );
+  }
+  const options = given.map((option): AskOption => {
+    const id = typeof option?.id === 'string' ? option.id : '';
+    if (!OPTION_ID.test(id)) {
+      throw new AppError(
+        'invalid_input',
+        `An option id is 1 to ${ASK_LIMITS.optionId} characters of A-Z, a-z, 0-9, _ and -`,
+      );
+    }
+    const label = text(option.label, ASK_LIMITS.label, 'An option label');
+    const detail = typeof option.detail === 'string' ? option.detail.trim() : '';
+    if (detail.length > ASK_LIMITS.detail) {
+      throw new AppError(
+        'invalid_input',
+        `An option detail is at most ${ASK_LIMITS.detail} characters`,
+      );
+    }
+    return detail ? { id, label, detail } : { id, label };
+  });
+  if (new Set(options.map((o) => o.id)).size !== options.length) {
+    throw new AppError('invalid_input', 'Option ids must be unique');
+  }
+  let recommended: Ask['recommended'] = null;
+  if (ask.recommended !== undefined && ask.recommended !== null) {
+    const optionId = ask.recommended.optionId;
+    if (!options.some((o) => o.id === optionId)) {
+      throw new AppError('invalid_input', 'ask.recommended.optionId must be one of the options');
+    }
+    recommended = {
+      optionId,
+      why: text(ask.recommended.why, ASK_LIMITS.why, 'ask.recommended.why'),
+    };
+  }
+  return { question, options, recommended };
+}
+
 function parseAnchor(json: string): Anchor {
   const value = JSON.parse(json) as Anchor;
   return value.kind === 'text'
@@ -95,8 +189,29 @@ export function createCommentService(db: DatabaseSync): CommentService {
        ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ${COMMENT_LIMITS.threads}`,
     ),
     comments: db.prepare(
-      `SELECT * FROM comments WHERE thread_id IN (SELECT value FROM json_each(?))
-       ORDER BY created_at, rowid`,
+      `SELECT c.*, k.comment_id, k.question, k.options_json, k.recommended_json, k.answer_option,
+         k.answered_by, k.answered_at
+       FROM comments c LEFT JOIN asks k ON k.comment_id = c.id
+       WHERE c.thread_id IN (SELECT value FROM json_each(?))
+       ORDER BY c.created_at, c.rowid`,
+    ),
+    insertAsk: db.prepare(
+      `INSERT INTO asks (comment_id, question, options_json, recommended_json) VALUES (?, ?, ?, ?)`,
+    ),
+    askOf: db.prepare(
+      `SELECT c.thread_id, t.artifact_id, t.resolved_at, k.options_json
+       FROM comments c JOIN threads t ON t.id = c.thread_id ${live}
+       LEFT JOIN asks k ON k.comment_id = c.id WHERE c.id = ?`,
+    ),
+    setAnswer: db.prepare(
+      'UPDATE asks SET answer_option = ?, answered_by = ?, answered_at = ? WHERE comment_id = ?',
+    ),
+    openAskCounts: db.prepare(
+      `SELECT t.artifact_id AS id, COUNT(*) AS open FROM asks k
+       JOIN comments c ON c.id = k.comment_id JOIN threads t ON t.id = c.thread_id ${live}
+       WHERE k.answered_at IS NULL AND t.resolved_at IS NULL
+         AND t.artifact_id IN (SELECT value FROM json_each(?))
+       GROUP BY t.artifact_id`,
     ),
     insertThread: db.prepare(
       `INSERT INTO threads (id, artifact_id, anchor_json, version, created_at, updated_at)
@@ -117,9 +232,11 @@ export function createCommentService(db: DatabaseSync): CommentService {
 
   const withComments = (rows: ThreadRow[]): Thread[] => {
     const byThread = new Map<string, Comment[]>();
-    for (const row of stmt.comments.all(JSON.stringify(rows.map((r) => r.id))) as CommentRow[]) {
+    const all = stmt.comments.all(JSON.stringify(rows.map((r) => r.id))) as (CommentRow &
+      (AskRow | { [K in keyof AskRow]: null }))[];
+    for (const row of all) {
       const list = byThread.get(row.thread_id) ?? [];
-      list.push(toComment(row));
+      list.push(toComment(row, row.comment_id === null ? undefined : (row as AskRow)));
       byThread.set(row.thread_id, list);
     }
     return rows.map((row) => ({
@@ -151,7 +268,13 @@ export function createCommentService(db: DatabaseSync): CommentService {
     },
 
     async add(input, author) {
-      const body = cleanBody(input.body);
+      // Asks come from agents; the owner answers them and never asks.
+      if (input.ask !== undefined && author.typed) {
+        throw new AppError('invalid_input', 'Only agents ask; the owner answers');
+      }
+      const ask = input.ask === undefined ? null : cleanAsk(input.ask);
+      const given = typeof input.body === 'string' ? input.body.trim() : '';
+      const body = cleanBody(ask && !given ? ask.question : input.body);
       const anchor = input.threadId === undefined ? cleanAnchor(input.anchor) : null;
       if (input.threadId !== undefined && (input.anchor || input.version !== undefined)) {
         throw new AppError('invalid_input', 'anchor and version are only for a new thread');
@@ -184,7 +307,16 @@ export function createCommentService(db: DatabaseSync): CommentService {
           threadId = thread.id;
           stmt.touch.run(time, threadId);
         }
-        stmt.insertComment.run(randomId(), threadId, author.name, author.typed ? 1 : 0, body, time);
+        const commentId = randomId();
+        stmt.insertComment.run(commentId, threadId, author.name, author.typed ? 1 : 0, body, time);
+        if (ask) {
+          stmt.insertAsk.run(
+            commentId,
+            ask.question,
+            JSON.stringify(ask.options),
+            ask.recommended ? JSON.stringify(ask.recommended) : null,
+          );
+        }
         return withComments([findThread(threadId) as ThreadRow])[0] as Thread;
       });
     },
@@ -208,6 +340,41 @@ export function createCommentService(db: DatabaseSync): CommentService {
         open: number;
       }[];
       return Object.fromEntries(rows.map((r) => [r.id, r.open]));
+    },
+
+    async openAskCounts(artifactIds) {
+      if (artifactIds.length === 0) return {};
+      const rows = stmt.openAskCounts.all(JSON.stringify(artifactIds)) as {
+        id: string;
+        open: number;
+      }[];
+      return Object.fromEntries(rows.map((r) => [r.id, r.open]));
+    },
+
+    async answer(artifactId, commentId, optionId, by) {
+      return transaction(db, () => {
+        const row = stmt.askOf.get(commentId) as
+          | {
+              thread_id: string;
+              artifact_id: string;
+              resolved_at: string | null;
+              options_json: string | null;
+            }
+          | undefined;
+        if (!row || row.artifact_id !== artifactId) return null;
+        if (row.options_json === null) throw notFound(`Ask ${commentId}`);
+        const options = JSON.parse(row.options_json) as AskOption[];
+        if (!options.some((o) => o.id === optionId)) {
+          throw new AppError('invalid_input', 'That is not one of the options of this ask');
+        }
+        if (row.resolved_at !== null) {
+          throw new AppError('invalid_input', 'The thread is resolved: reopen it to answer');
+        }
+        const time = now();
+        stmt.setAnswer.run(optionId, by, time, commentId);
+        stmt.touch.run(time, row.thread_id);
+        return withComments([findThread(row.thread_id) as ThreadRow])[0] ?? null;
+      });
     },
   };
 }

@@ -91,6 +91,7 @@ function setup(
 ) {
   const added: { input: CommentInput; author: CommentAuthor }[] = [];
   const resolved: [string, boolean][] = [];
+  const answered: unknown[][] = [];
   const comments: CommentService = {
     async list(id) {
       return id === 'art1' ? [thread] : null;
@@ -105,6 +106,14 @@ function setup(
     },
     async openCounts(ids) {
       return Object.fromEntries(ids.filter((id) => id === 'art1').map((id) => [id, 3]));
+    },
+    async openAskCounts(ids) {
+      return Object.fromEntries(ids.filter((id) => id === 'art1').map((id) => [id, 1]));
+    },
+    // Present on the service, so a test can tell no tool ever reaches it.
+    async answer(...args) {
+      answered.push(args);
+      throw new Error('answer must not be reachable from MCP');
     },
     ...commentOverrides,
   };
@@ -206,7 +215,7 @@ function setup(
   };
   const app = new Hono();
   app.route('/mcp', createMcpRoutes(deps));
-  return { app, published, searched, restored, shareCalls, added, resolved, dataCalls };
+  return { app, published, searched, restored, shareCalls, added, resolved, answered, dataCalls };
 }
 
 let nextId = 1;
@@ -642,4 +651,115 @@ test('a data tool maps forbidden from the service', async () => {
   const { result, json } = await callTool(app, 'artifact_data_get', { id: 'x', docId: 'd' });
   assert.equal(result.isError, true);
   assert.equal(json.error, 'forbidden');
+});
+
+const ASK = {
+  question: 'Which layout?',
+  options: [
+    { id: 'a', label: 'Two columns', detail: 'Denser' },
+    { id: 'b', label: 'One column' },
+  ],
+  recommended: { optionId: 'a', why: 'Fits the data' },
+};
+
+test('add_comment passes an ask through, never typed and without an answer', async () => {
+  const { app, added } = setup();
+  const { result } = await callTool(app, 'add_comment', { id: 'art1', ask: ASK });
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(added, [
+    {
+      input: { artifactId: 'art1', body: '', threadId: undefined, anchor: undefined, ask: ASK },
+      author: { name: 'claude-laptop', typed: false },
+    },
+  ]);
+});
+
+test('add_comment refuses an answer, a forged typed answer or too few options in an ask', async () => {
+  const { app, added } = setup();
+  const answer = { optionId: 'a', label: 'Two columns', by: 'owner@example.com', typed: true };
+  for (const ask of [
+    { ...ASK, answer },
+    { ...ASK, options: [{ ...ASK.options[0], answer }, ASK.options[1]] },
+    { ...ASK, options: [ASK.options[0]] },
+    { ...ASK, options: Array.from({ length: 7 }, (_, i) => ({ id: `o${i}`, label: 'x' })) },
+    { ...ASK, options: [{ id: 'not ok', label: 'x' }, ASK.options[1]] },
+    { ...ASK, recommended: { ...ASK.recommended, typed: true } },
+  ]) {
+    assert.equal(await invalid(app, 'add_comment', { id: 'art1', ask }), true);
+  }
+  assert.deepEqual(added, []);
+});
+
+test('no tool can answer an ask, whatever the arguments say', async () => {
+  const { app, answered } = setup();
+  const tools: { name: string; inputSchema: { properties?: object } }[] = (
+    await (await rpc(app, 'tools/list', {})).json()
+  ).result.tools;
+  assert.deepEqual(
+    tools.map((t) => t.name).filter((n) => /answer|ask|decide|choose/.test(n)),
+    [],
+  );
+  for (const t of tools) {
+    assert.ok(!('answer' in (t.inputSchema.properties ?? {})), t.name);
+    assert.ok(!('optionId' in (t.inputSchema.properties ?? {})), t.name);
+  }
+  for (const { name } of tools) {
+    const args = {
+      id: 'art1',
+      threadId: 'th1',
+      commentId: 'c1',
+      optionId: 'a',
+      answer: { optionId: 'a', by: 'owner@example.com', typed: true },
+      body: 'answer: a',
+      ask: { ...ASK, answer: { optionId: 'a' } },
+    };
+    assert.equal((await rpc(app, 'tools/call', { name, arguments: args })).status, 200);
+  }
+  assert.deepEqual(answered, []);
+});
+
+test('list_comments shows the answer, and the tools say only a typed answer decides', async () => {
+  const answer = {
+    optionId: 'a',
+    label: 'Two columns',
+    by: 'owner@example.com',
+    at: '2026-01-05T00:00:00Z',
+    typed: true as const,
+  };
+  const comment = {
+    id: 'c9',
+    author: 'claude-laptop',
+    typed: false,
+    body: 'Which layout?',
+    createdAt: '2026-01-04T00:00:00Z',
+    ask: { ...ASK, answer },
+  };
+  const { app } = setup({}, { list: async () => [{ ...thread, comments: [comment] }] });
+  const { json } = await callTool(app, 'list_comments', { id: 'art1' });
+  assert.deepEqual(json.threads[0].comments[0].ask.answer, answer);
+
+  const tools = (await (await rpc(app, 'tools/list', {})).json()).result.tools as {
+    name: string;
+    description: string;
+  }[];
+  for (const name of ['list_comments', 'add_comment', 'resolve_comment']) {
+    const description = tools.find((t) => t.name === name)?.description ?? '';
+    assert.match(description, /only when `answer.typed` is true/, name);
+    assert.match(description, /irreversible needs such an answer/, name);
+    assert.match(description, /no tool can answer one/, name);
+  }
+});
+
+test('list_artifacts counts unanswered asks per item', async () => {
+  const { app } = setup({
+    list: async () => ({ items: [artifact, { ...artifact, id: 'art2' }], nextCursor: null }),
+  });
+  const { json } = await callTool(app, 'list_artifacts', {});
+  assert.deepEqual(
+    json.items.map((a: { id: string; openAsks: number }) => [a.id, a.openAsks]),
+    [
+      ['art1', 1],
+      ['art2', 0],
+    ],
+  );
 });

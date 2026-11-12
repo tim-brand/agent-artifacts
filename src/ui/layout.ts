@@ -55,7 +55,7 @@ export function contentSecurityPolicy(contentOrigin: string): string {
 export type Theme = 'light' | 'dark' | 'system';
 export const THEMES: readonly Theme[] = ['light', 'dark', 'system'];
 
-export type Nav = 'library' | 'trash' | 'tokens' | 'connect' | 'docs' | null;
+export type Nav = 'library' | 'asks' | 'trash' | 'tokens' | 'connect' | 'docs' | null;
 
 /** What every page of the app shell needs. */
 export type Shell = {
@@ -89,6 +89,8 @@ const ICONS: Record<string, string> = {
   live: '<circle cx="8" cy="8" r="2"/><path d="M4.5 4.5a5 5 0 0 0 0 7M11.5 4.5a5 5 0 0 1 0 7"/>',
   globe: '<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/>',
   cmt: '<path d="M2.5 3h11v7.5h-6l-3 2.5v-2.5h-2z"/>',
+  ask: '<circle cx="8" cy="8" r="6"/><path d="M6.25 6.25a1.75 1.75 0 1 1 2.5 1.6c-.5.25-.75.6-.75 1.15v.25M8 11.5h.01"/>',
+  check: '<path d="m3 8.5 3 3 7-7"/>',
   back: '<path d="M10 3 5 8l5 5"/>',
   chev: '<path d="m4.5 6 3.5 3.5L11.5 6"/>',
   ext: '<path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M11.5 9.5v4h-9v-9h4"/>',
@@ -188,8 +190,15 @@ ${icon('search')}<input type="search" name="q" value="${query}" placeholder="${s
 /** The sidebar, the top bar and the page. */
 export function appShell(shell: Shell, opts: { title: string; body: Html }): Html {
   const { summary } = shell;
-  const nav = (href: string, label: string, name: string, on: boolean, count?: number) =>
-    html`<a class="nav${on ? ' on' : ''}" href="${href}"${on ? raw(' aria-current="page"') : ''}>${icon(name)}<span class="label">${label}</span>${count === undefined ? '' : html`<span class="n">${count}</span>`}</a>`;
+  const nav = (
+    href: string,
+    label: string,
+    name: string,
+    on: boolean,
+    count?: number,
+    attention = false,
+  ) =>
+    html`<a class="nav${on ? ' on' : ''}" href="${href}"${on ? raw(' aria-current="page"') : ''}>${icon(name)}<span class="label">${label}</span>${count === undefined ? '' : html`<span class="n${attention && count > 0 ? ' attn' : ''}">${count}</span>`}</a>`;
   const agents = summary.agents.map((a) => {
     const on = shell.nav === 'library' && shell.agent === a.name;
     return html`<a class="nav agent${on ? ' on' : ''}" href="/?${new URLSearchParams({ agent: a.name })}"${on ? raw(' aria-current="page"') : ''}><span class="dot"></span><span class="label">${a.name}</span><span class="n">${a.count}</span></a>`;
@@ -204,6 +213,7 @@ export function appShell(shell: Shell, opts: { title: string; body: Html }): Htm
 <div class="side-body" id="side-body">
 <nav class="side-nav" aria-label="Main">
 ${nav('/', 'Library', 'lib', shell.nav === 'library' && !shell.agent, summary.total)}
+${nav('/?tab=asks', 'Asks for you', 'ask', shell.nav === 'asks', summary.openAsks, true)}
 ${nav('/trash', 'Trash', 'trash', shell.nav === 'trash', summary.trash)}
 ${agents.length ? html`<div class="group">Agents</div>${agents}` : ''}
 <div class="group">Settings</div>

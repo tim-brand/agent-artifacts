@@ -68,6 +68,7 @@ const TAB_FILTERS: Record<LibraryTab, LibraryFilter> = {
   live: { live: true },
   shared: { shared: true },
   comments: { openComments: true },
+  asks: { openAsks: true },
 };
 
 /**
@@ -205,7 +206,7 @@ export function createUiRoutes(deps: Deps): Hono {
     ]);
     return c.html(
       libraryPage({
-        shell: await shell(c, 'library', { agent }),
+        shell: await shell(c, state.tab === 'asks' ? 'asks' : 'library', { agent }),
         state,
         items: page.items,
         nextCursor: page.nextCursor,
@@ -379,6 +380,21 @@ export function createUiRoutes(deps: Deps): Hono {
     const body = field(form, 'body');
     if (body.trim()) await comments.add({ artifactId: id, threadId, body }, owner(c));
     const thread = await comments.resolve(threadId, field(form, 'resolved') !== '0', id);
+    if (!thread) return notFound(c);
+    return backTo(c, id, form, thread.id);
+  });
+
+  // The only way to answer an ask: the owner, signed in through forward auth, clicks an option.
+  // The answerer is the signed-in user; nothing in the form says who answered.
+  ui.post('/a/:id/asks/:commentId', async (c) => {
+    const id = c.req.param('id');
+    const form = await c.req.parseBody();
+    const thread = await comments.answer(
+      id,
+      c.req.param('commentId'),
+      field(form, 'optionId'),
+      c.get('user'),
+    );
     if (!thread) return notFound(c);
     return backTo(c, id, form, thread.id);
   });

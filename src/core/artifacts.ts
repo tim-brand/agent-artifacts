@@ -397,6 +397,7 @@ export function createArtifactService(
           agent: row.agent,
           publicLinks: row.public_links,
           openComments: row.open_comments,
+          openAsks: row.open_asks,
         })),
         nextCursor: page.nextCursor,
       };
