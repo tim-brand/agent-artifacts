@@ -125,6 +125,9 @@ function setup(
     async list() {
       return { items: [artifact], nextCursor: null };
     },
+    browse: () => Promise.reject(new Error('unused')),
+    count: () => Promise.reject(new Error('unused')),
+    summary: () => Promise.reject(new Error('unused')),
     async search(query) {
       searched.push(query);
       return { items: [{ artifact, snippet: 'say «hello» there' }], nextCursor: 'c2' };

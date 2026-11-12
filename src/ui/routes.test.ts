@@ -10,6 +10,9 @@ import {
   type CommentService,
   type ContentSigner,
   type Deps,
+  type LibraryFilter,
+  type LibraryQuery,
+  type PublishInput,
   type SearchQuery,
   type ShareLink,
   type ShareLinkInput,
@@ -113,11 +116,20 @@ function fakeDeps(overrides: {
   ];
   const deleted: string[] = [];
   const searched: SearchQuery[] = [];
+  const browsed: LibraryQuery[] = [];
+  const counted: LibraryFilter[] = [];
+  const published: { input: PublishInput; by: string }[] = [];
+  const entryOf = (a: Artifact) =>
+    ({ pdf: 'document.pdf', image: 'chart.svg' })[a.format as string] ?? 'index.html';
   const undeleted: string[] = [];
   const restored: { id: string; version: number; publishedBy: string }[] = [];
   const artifacts: ArtifactService = {
-    publish: async () => {
-      throw new Error('not used');
+    publish: async (input, by) => {
+      published.push({ input, by });
+      const a = list.find((x) => x.id === input.id);
+      if (!a) throw new AppError('not_found', 'gone');
+      if (!input.title?.trim()) throw new AppError('invalid_input', 'title must not be empty');
+      return { id: a.id, version: a.latestVersion, title: input.title, url: `${APP}/a/${a.id}` };
     },
     get: async (id, n) => {
       const a = list.find((x) => x.id === id);
@@ -125,17 +137,40 @@ function fakeDeps(overrides: {
       if (!a || !v || v > a.latestVersion) return null;
       return {
         artifact: a,
-        version: version(
-          a,
-          v,
-          { pdf: 'document.pdf', image: 'chart.svg' }[a.format as string] ?? 'index.html',
-        ),
+        version: version(a, v, entryOf(a)),
       };
     },
     readFile: async () => null,
     list: async (query) => ({
       items: list.filter((a) => !query?.format || a.format === query.format),
       nextCursor: query?.cursor ? null : 'next-page',
+    }),
+    browse: async (query = {}) => {
+      browsed.push(query);
+      return {
+        items: list
+          .filter((a) => !query.format || a.format === query.format)
+          .map((a) => ({
+            artifact: a,
+            entry: entryOf(a),
+            agent: a.id === 'a1' ? 'Claude <Code>' : 'OpenCode',
+            publicLinks: a.id === 'a1' ? 1 : 0,
+            openComments: a.id === 'a1' ? 2 : 0,
+          })),
+        nextCursor: query.cursor ? null : 'next-page',
+      };
+    },
+    count: async (filter = {}) => {
+      counted.push(filter);
+      return filter.live ? 0 : filter.shared ? 1 : filter.openComments ? 1 : list.length;
+    },
+    summary: async () => ({
+      total: list.length,
+      trash: 1,
+      agents: [
+        { name: 'Claude <Code>', count: 1 },
+        { name: 'OpenCode', count: 2 },
+      ],
     }),
     search: async (query) => {
       searched.push(query);
@@ -262,6 +297,9 @@ function fakeDeps(overrides: {
     app: createUiRoutes(deps),
     deleted,
     searched,
+    browsed,
+    counted,
+    published,
     undeleted,
     restored,
     shared,
@@ -290,19 +328,37 @@ const post = (
     body: new URLSearchParams(body).toString(),
   });
 
+const cookie = (res: Response) => res.headers.get('set-cookie') ?? '';
+/** The first element of a page matching an opening-tag pattern. */
+const tag = (body: string, pattern: RegExp) => body.match(pattern)?.[0] ?? '';
+
 describe('auth', () => {
-  it('returns 401 without user header or devUser', async () => {
+  it('returns 401 without user header or devUser, without the sidebar', async () => {
     const { app } = fakeDeps({});
     const res = await app.request(`${APP}/`);
     assert.equal(res.status, 401);
-    assert.match(await res.text(), /Not signed in/);
+    const body = await res.text();
+    assert.match(body, /Not signed in/);
+    assert.doesNotMatch(body, /class="side"/);
+    assert.doesNotMatch(body, /Back to the library/);
   });
 
   it('uses devUser when there is no header, and shows the user', async () => {
     const { app } = fakeDeps({ config: { devUser: 'dev@local' } });
     const res = await app.request(`${APP}/`);
     assert.equal(res.status, 200);
-    assert.match(await res.text(), /dev@local/);
+    assert.match(await res.text(), /<span class="who-name">dev@local<\/span>/);
+  });
+
+  it('shows the X-authentik-name with initials, escaped', async () => {
+    const { app } = fakeDeps({});
+    const res = await app.request(`${APP}/`, {
+      headers: { ...USER, 'X-authentik-name': 'Tim <Brand>' },
+    });
+    const body = await res.text();
+    assert.match(body, /<span class="who-name">Tim &lt;Brand&gt;<\/span>/);
+    assert.match(body, /<small>owner@example\.com<\/small>/);
+    assert.match(body, /<span class="av" aria-hidden="true">TB<\/span>/);
   });
 
   it('never serves the UI under /mcp', async () => {
@@ -313,74 +369,288 @@ describe('auth', () => {
   });
 });
 
-describe('list', () => {
-  it('renders titles escaped, newest first, with load more and security headers', async () => {
+describe('static files and CSP', () => {
+  it('allows only scripts, styles and fonts from self, with no inline style at all', async () => {
     const { app } = fakeDeps({});
+    for (const path of ['/', '/a/a1', '/trash', '/settings/tokens', '/connect', '/nowhere']) {
+      const res = await get(app, path);
+      const csp = res.headers.get('content-security-policy') ?? '';
+      assert.match(csp, /style-src 'self'; font-src 'self'; script-src 'self';/);
+      assert.match(csp, /frame-src https:\/\/content\.test/);
+      assert.match(csp, /frame-ancestors 'none'/);
+      assert.doesNotMatch(csp, /unsafe-inline|sha256/);
+      const body = await res.text();
+      assert.doesNotMatch(body, /<style|\sstyle="/, path);
+      assert.equal(body.match(/<script/g)?.length, 1, path);
+      assert.match(body, /<script src="\/static\/app\.js\?v=[0-9a-f]{12}" defer><\/script>/);
+      assert.match(body, /<link rel="stylesheet" href="\/static\/app\.css\?v=[0-9a-f]{12}">/);
+      assert.match(body, /<link rel="icon" href="\/static\/icon\.svg\?v=[0-9a-f]{12}"/);
+    }
+  });
+
+  it('serves the script, the stylesheet, the icon and the fonts with long cache headers', async () => {
+    const { app } = fakeDeps({});
+    const files: [string, string, RegExp | null][] = [
+      ['/static/app.js', 'text/javascript; charset=utf-8', /aa:selection/],
+      ['/static/app.css', 'text/css; charset=utf-8', /font-family: "Geist"|font-family: 'Geist'/],
+      ['/static/icon.svg', 'image/svg+xml', /^<svg [^>]*>(?![\s\S]*<script)/],
+      ['/static/fonts/Geist-Variable.woff2', 'font/woff2', null],
+      ['/static/fonts/GeistMono-Variable.woff2', 'font/woff2', null],
+    ];
+    for (const [path, type, content] of files) {
+      const res = await get(app, path);
+      assert.equal(res.status, 200, path);
+      assert.equal(res.headers.get('content-type'), type);
+      assert.equal(res.headers.get('cache-control'), 'private, max-age=31536000, immutable');
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (content) assert.match(new TextDecoder().decode(bytes), content);
+      else assert.equal(new TextDecoder().decode(bytes.slice(0, 4)), 'wOF2');
+    }
+    const css = await (await get(app, '/static/app.css')).text();
+    assert.match(
+      css,
+      /url\("\/static\/fonts\/Geist-Variable\.woff2"\)|url\('\/static\/fonts\/Geist-Variable\.woff2'\)/,
+    );
+    assert.doesNotMatch(css, /https?:\/\//);
+    assert.equal((await get(app, '/static/../routes.ts')).status, 404);
+    assert.equal((await get(app, '/static/fonts/OFL.txt')).status, 404);
+  });
+});
+
+describe('theme', () => {
+  it('follows the system without a cookie, and renders a chosen theme on <html>', async () => {
+    const { app } = fakeDeps({});
+    const system = await (await get(app, '/')).text();
+    assert.match(system, /<html lang="en">/);
+    assert.match(system, /value="system" title="System" aria-label="System" aria-pressed="true"/);
+
+    for (const [value, attr] of [
+      ['dark', ' data-theme="dark"'],
+      ['light', ' data-theme="light"'],
+      ['purple', ''],
+    ]) {
+      const res = await app.request(`${APP}/a/a1`, {
+        headers: { ...USER, Cookie: `aa_theme=${value}` },
+      });
+      assert.match(await res.text(), new RegExp(`<html lang="en"${attr}>`));
+    }
+  });
+
+  it('sets the cookie from the form and goes back to a local path only', async () => {
+    const { app } = fakeDeps({});
+    const res = await post(
+      app,
+      '/settings/theme',
+      { theme: 'dark', back: '/a/a1?panel=share' },
+      APP,
+    );
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), '/a/a1?panel=share');
+    assert.match(cookie(res), /^aa_theme=dark; Max-Age=31536000; Path=\/; Secure; SameSite=Lax$/);
+    for (const back of ['//evil.test', 'https://evil.test', '/\\evil.test', 'x', '/a\nb']) {
+      const other = await post(app, '/settings/theme', { theme: 'light', back }, APP);
+      assert.equal(other.headers.get('location'), '/', back);
+    }
+    assert.equal((await post(app, '/settings/theme', { theme: 'blue' }, APP)).status, 400);
+    assert.equal((await post(app, '/settings/theme', { theme: 'dark' }, CONTENT)).status, 403);
+  });
+
+  it('leaves Secure off on a plain http origin', async () => {
+    const { app } = fakeDeps({ config: { appOrigin: 'http://localhost:4300' } });
+    const res = await app.request('http://localhost:4300/settings/theme', {
+      method: 'POST',
+      headers: {
+        ...USER,
+        Origin: 'http://localhost:4300',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: 'theme=system',
+    });
+    assert.doesNotMatch(cookie(res), /Secure/);
+  });
+});
+
+describe('library', () => {
+  it('renders cards escaped, with live previews and the sidebar', async () => {
+    const { app, browsed } = fakeDeps({});
     const res = await get(app, '/');
     const body = await res.text();
     assert.equal(res.status, 200);
+    assert.deepEqual(browsed, [{ sort: 'updated', cursor: undefined, limit: 24 }]);
     assert.ok(body.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
     assert.ok(!body.includes('<script>alert(1)'));
     assert.ok(body.indexOf('alert(1)') < body.indexOf('A PDF'));
-    assert.match(body, /3 versions/);
-    assert.match(body, /href="\/\?cursor=next-page"/);
-    assert.match(body, /owner@example\.com/);
-    const csp = res.headers.get('content-security-policy') ?? '';
-    assert.match(csp, /frame-src https:\/\/content\.test/);
-    assert.match(csp, /frame-ancestors 'none'/);
-    assert.doesNotMatch(csp, /unsafe-inline/);
+    assert.match(body, /<a class="stretch" href="\/a\/a1">/);
+    // A preview: the signed entry in a frame without scripts, kept out of tab order and a11y.
+    const preview = tag(body, /<iframe[^>]*a1\/3\/index\.html[^>]*>/);
+    assert.match(preview, /src="https:\/\/content\.test\/s\/9\.sig\/a1\/3\/index\.html"/);
+    assert.match(preview, / sandbox="" loading="lazy" tabindex="-1" aria-hidden="true"/);
+    assert.match(
+      body,
+      /<iframe src="https:\/\/content\.test\/s\/9\.sig\/i1\/1\/chart\.svg" sandbox=""/,
+    );
+    // A PDF gets the format tile.
+    assert.doesNotMatch(body, /document\.pdf/);
+    assert.match(body, /<div class="thumb tile">.*<b>A PDF<\/b><\/div>/);
+    // Sidebar: counts and agents, escaped.
+    assert.match(
+      body,
+      /<a class="nav on" href="\/" aria-current="page">.*Library<\/span><span class="n">3<\/span>/,
+    );
+    assert.match(body, /Trash<\/span><span class="n">1<\/span>/);
+    assert.match(
+      body,
+      /href="\/\?agent=Claude\+%3CCode%3E"><span class="dot"><\/span><span class="label">Claude &lt;Code&gt;<\/span><span class="n">1<\/span>/,
+    );
+    assert.match(body, /<span class="agent">Claude &lt;Code&gt;<\/span>/);
+    assert.match(body, /<span class="pill cmt" title="2 open comment threads">.*2<\/span>/);
+    assert.match(body, /<span class="pill pub" title="1 public link">/);
+    assert.match(body, /<a class="btn" href="\/\?cursor=next-page">Load more<\/a>/);
     assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(res.headers.get('referrer-policy'), 'same-origin');
   });
 
-  it('filters by format and keeps it in the load more link', async () => {
-    const { app } = fakeDeps({});
-    const body = await (await get(app, '/?format=pdf')).text();
-    assert.ok(body.includes('A PDF'));
-    assert.ok(!body.includes('alert(1)'));
-    assert.match(body, /href="\/\?format=pdf&amp;cursor=next-page"/);
+  it('has tabs with counts that keep the format and agent filters', async () => {
+    const { app, browsed, counted } = fakeDeps({});
+    const body = await (await get(app, '/?tab=comments&format=html&agent=OpenCode')).text();
+    assert.deepEqual(browsed, [
+      {
+        format: 'html',
+        agent: 'OpenCode',
+        openComments: true,
+        sort: 'updated',
+        cursor: undefined,
+        limit: 24,
+      },
+    ]);
+    assert.deepEqual(counted, [
+      { format: 'html', agent: 'OpenCode' },
+      { format: 'html', agent: 'OpenCode', live: true },
+      { format: 'html', agent: 'OpenCode', shared: true },
+      { format: 'html', agent: 'OpenCode', openComments: true },
+    ]);
+    assert.match(
+      body,
+      /<a class="tab" href="\/\?format=html&amp;agent=OpenCode">All<span class="n">3<\/span><\/a>/,
+    );
+    assert.match(
+      body,
+      /<a class="tab" href="\/\?tab=live&amp;format=html&amp;agent=OpenCode">Live<span class="n">0<\/span>/,
+    );
+    assert.match(
+      body,
+      /<a class="tab on" href="\/\?tab=comments&amp;format=html&amp;agent=OpenCode" aria-current="page">Open comments<span class="n">1<\/span>/,
+    );
+    assert.match(body, /<span class="count">1 artifact<\/span>/);
+    assert.match(body, /<span class="chip set">.*Format<b>HTML<\/b>/);
+    assert.match(body, /<span class="chip set">Agent<b>OpenCode<\/b>/);
+    assert.match(body, /<a class="clear" href="\/\?tab=comments">Clear filters<\/a>/);
+    assert.match(
+      body,
+      /href="\/\?tab=comments&amp;format=html&amp;agent=OpenCode&amp;cursor=next-page">Load more/,
+    );
+    // The sidebar marks the agent being filtered on.
+    assert.match(body, /<a class="nav agent on" href="\/\?agent=OpenCode" aria-current="page">/);
+    assert.match(body, /<a class="nav" href="\/">.*Library/);
   });
 
-  it('has an image chip and badge', async () => {
-    const { app } = fakeDeps({});
-    const all = await (await get(app, '/')).text();
-    assert.match(all, /<a href="\/\?format=image">image<\/a>/);
-    const body = await (await get(app, '/?format=image')).text();
-    assert.match(body, /<a href="\/\?format=image" aria-current="page">image<\/a>/);
-    assert.match(body, /A chart<\/a>\n<span class="badge">image<\/span>/);
-    assert.ok(!body.includes('A PDF'));
+  it('ignores unknown tabs, formats and sorts, and sorts by title when asked', async () => {
+    const { app, browsed } = fakeDeps({});
+    await get(app, '/?tab=secret&format=exe&sort=random');
+    await get(app, '/?sort=title&cursor=abc');
+    assert.deepEqual(browsed, [
+      { sort: 'updated', cursor: undefined, limit: 24 },
+      { sort: 'title', cursor: 'abc', limit: 24 },
+    ]);
+    const body = await (await get(app, '/?sort=title')).text();
+    assert.match(body, /<span class="btn ghost">Title/);
+    assert.match(
+      body,
+      /<a class="menu-item on" href="\/\?sort=title" aria-current="page">Title<\/a>/,
+    );
   });
 
-  it('shows an empty state that points to /connect', async () => {
-    const { app } = fakeDeps({
-      artifacts: { list: async () => ({ items: [], nextCursor: null }) },
+  it('switches between grid and list, remembering it in a cookie', async () => {
+    const { app } = fakeDeps({});
+    const grid = await (await get(app, '/')).text();
+    assert.match(grid, /<div class="grid">/);
+    assert.match(grid, /<a href="\/\?view=list" aria-label="List"/);
+
+    const res = await get(app, '/?view=list&format=html');
+    assert.match(cookie(res), /^aa_view=list; Max-Age=31536000; Path=\/; Secure; SameSite=Lax$/);
+    const list = await res.text();
+    assert.match(list, /<div class="list">/);
+    assert.match(list, /<a class="ttl stretch" href="\/a\/a1">/);
+    assert.doesNotMatch(list, /<iframe/);
+    // The view stays out of the other links.
+    assert.match(list, /href="\/\?format=html&amp;cursor=next-page">Load more/);
+
+    const remembered = await app.request(`${APP}/`, {
+      headers: { ...USER, Cookie: 'aa_view=list' },
     });
-    const body = await (await get(app, '/')).text();
-    assert.match(body, /href="\/connect">Connect an agent/);
+    assert.match(await remembered.text(), /<div class="list">/);
+    assert.equal(cookie(remembered), '');
+  });
+
+  it('shows an empty state that points to /connect, or back to everything', async () => {
+    const empty = fakeDeps({
+      artifacts: {
+        browse: async () => ({ items: [], nextCursor: null }),
+        count: async () => 0,
+      },
+    });
+    assert.match(await (await get(empty.app, '/')).text(), /href="\/connect">Connect an agent/);
+    const filtered = await (await get(empty.app, '/?format=pdf')).text();
+    assert.match(filtered, /No artifacts match in <strong>PDF<\/strong>/);
+    assert.match(filtered, /<a href="\/">Show everything<\/a>/);
+  });
+
+  it('answers a bad cursor with 400', async () => {
+    const { app } = fakeDeps({
+      artifacts: {
+        browse: async () => {
+          throw new AppError('invalid_input', 'Invalid cursor');
+        },
+      },
+    });
+    const res = await get(app, '/?cursor=junk');
+    assert.equal(res.status, 400);
+    assert.match(await res.text(), /Invalid cursor/);
   });
 });
 
 describe('search', () => {
-  it('shows a search box on the list page', async () => {
+  it('has a search box on every app page that "/" focuses', async () => {
     const { app, searched } = fakeDeps({});
-    const body = await (await get(app, '/')).text();
-    assert.match(body, /<form class="search" method="get" action="\/" role="search">/);
-    assert.match(body, /<input type="search" name="q" value=""/);
+    for (const path of ['/', '/trash', '/settings/tokens', '/connect', '/docs/runtime', '/a/a1']) {
+      const body = await (await get(app, path)).text();
+      assert.match(
+        body,
+        /<form class="search( sm)?" method="get" action="\/" role="search">/,
+        path,
+      );
+      assert.match(
+        body,
+        /<input type="search" name="q" value="" placeholder="[^"]+" maxlength="200" aria-label="Search artifacts" data-search>/,
+      );
+    }
     assert.deepEqual(searched, []);
   });
 
   it('escapes snippets and turns only the match markers into <mark>', async () => {
-    const { app, searched } = fakeDeps({});
+    const { app, searched, browsed } = fakeDeps({});
     const res = await get(app, '/?q=%20%22onerror%22%20');
     const body = await res.text();
     assert.equal(res.status, 200);
     assert.deepEqual(searched, [{ query: '"onerror"', cursor: undefined, limit: 20 }]);
+    assert.deepEqual(browsed, []);
     assert.ok(
       body.includes('<p class="hit">a <mark>&lt;img src=x onerror=alert(1)&gt;</mark> b «c</p>'),
     );
     assert.ok(!body.includes('<img'));
     assert.ok(body.includes('value="&quot;onerror&quot;"'));
     assert.ok(body.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+    assert.match(body, /<span class="pill cmt" title="2 open comment threads">/);
     assert.match(body, /href="\/\?q=%22onerror%22&amp;cursor=more">More results/);
     assert.ok(!body.includes('A PDF'));
   });
@@ -415,19 +685,34 @@ describe('artifact page', () => {
   it('sandboxes html artifacts without allow-same-origin', async () => {
     const { app } = fakeDeps({});
     const body = await (await get(app, '/a/a1')).text();
-    const iframe = body.match(/<iframe[^>]*>/)?.[0] ?? '';
+    const iframe = tag(body, /<iframe[^>]*>/);
+    assert.match(iframe, /^<iframe class="artifact"/);
     assert.match(iframe, /src="https:\/\/content\.test\/s\/9\.sig\/a1\/3\/index\.html"/);
     assert.match(iframe, /sandbox="allow-scripts allow-popups/);
     assert.doesNotMatch(iframe, /allow-same-origin/);
-    assert.ok(body.includes('A &lt;b&gt;description&lt;/b&gt;'));
-    assert.match(body, /href="https:\/\/content\.test\/s\/9\.sig\/a1\/3\/style\.css"/);
-    assert.match(body, /Open in new tab/);
+    assert.match(body, /<h1 class="title">&lt;script&gt;alert\(1\)&lt;\/script&gt;<\/h1>/);
+    assert.match(
+      body,
+      /<textarea class="input" name="description" rows="3" maxlength="2000">A &lt;b&gt;description&lt;\/b&gt;<\/textarea>/,
+    );
+    assert.match(
+      body,
+      /<a href="https:\/\/content\.test\/s\/9\.sig\/a1\/3\/style\.css" target="_blank" rel="noopener noreferrer">style\.css<\/a>/,
+    );
+    assert.match(
+      body,
+      /<a class="btn ghost raw" href="https:\/\/content\.test\/s\/9\.sig\/a1\/3\/index\.html" target="_blank" rel="noopener noreferrer">.*Open raw/,
+    );
+    assert.match(body, /<span class="muted fmt">HTML<\/span>/);
+    assert.match(body, /<summary class="vsel" aria-label="Version"><b>v3<\/b>/);
+    assert.match(body, /action="\/a\/a1\/delete" data-confirm="Move this artifact to the trash\?/);
+    assert.doesNotMatch(body, /class="side"/);
   });
 
   it('gives pdf artifacts no sandbox', async () => {
     const { app } = fakeDeps({});
     const body = await (await get(app, '/a/p1')).text();
-    const iframe = body.match(/<iframe[^>]*>/)?.[0] ?? '';
+    const iframe = tag(body, /<iframe[^>]*>/);
     assert.match(iframe, /document\.pdf/);
     assert.doesNotMatch(iframe, /sandbox/);
   });
@@ -435,18 +720,72 @@ describe('artifact page', () => {
   it('sandboxes image artifacts, since an SVG can carry script', async () => {
     const { app } = fakeDeps({});
     const body = await (await get(app, '/a/i1')).text();
-    const iframe = body.match(/<iframe[^>]*>/)?.[0] ?? '';
+    const iframe = tag(body, /<iframe[^>]*>/);
     assert.match(iframe, /chart\.svg/);
     assert.match(iframe, /sandbox="allow-scripts allow-popups/);
-    assert.match(body, /<span class="badge">image<\/span>/);
+    assert.match(body, /<span class="muted fmt">Image<\/span>/);
   });
 
-  it('shows the requested version', async () => {
+  it('shows the requested version, with a way back to the latest', async () => {
     const { app } = fakeDeps({});
     const body = await (await get(app, '/a/a1/v/2')).text();
     assert.match(body, /<iframe[^>]*src="https:\/\/content\.test\/s\/9\.sig\/a1\/2\/index\.html"/);
-    assert.match(body, /<a href="\/a\/a1\/v\/2" aria-current="page">v2 · agent-2/);
-    assert.match(body, /Version 2 of 3/);
+    assert.match(
+      body,
+      /<a class="menu-item on" href="\/a\/a1\/v\/2" aria-current="page"><b>v2<\/b><span class="label">agent-2<\/span>/,
+    );
+    assert.match(body, /<a class="menu-item" href="\/a\/a1"><b>v3<\/b>/);
+    assert.match(body, /You are viewing <b>v2<\/b>; the latest is v3\./);
+    assert.match(
+      body,
+      /<li class="ver viewing">\n<div class="l1"><b>v2<\/b><span class="tag soft">Viewing<\/span>/,
+    );
+    assert.match(
+      body,
+      /<li class="ver cur">\n<div class="l1"><b>v3<\/b><span class="tag">Current<\/span>/,
+    );
+  });
+
+  it('opens the panel on the remembered tab, or the one asked for, and remembers it', async () => {
+    const { app } = fakeDeps({});
+    const pane = (body: string, name: string) =>
+      tag(body, new RegExp(`<section class="pbody" id="pane-${name}"[^>]*>`));
+
+    const first = await (await get(app, '/a/a1')).text();
+    assert.match(tag(first, /<aside class="panel"[^>]*>/), /aria-label="Artifact panel">$/);
+    assert.doesNotMatch(pane(first, 'comments'), /hidden/);
+    assert.match(pane(first, 'versions'), / hidden>$/);
+    assert.match(
+      first,
+      /<a class="ptab on" href="\/a\/a1\?panel=comments" role="tab"[^>]*aria-selected="true"/,
+    );
+
+    const res = await get(app, '/a/a1/v/2?panel=versions');
+    assert.match(cookie(res), /^aa_panel=versions;/);
+    const versions = await res.text();
+    assert.doesNotMatch(pane(versions, 'versions'), /hidden/);
+    assert.match(pane(versions, 'comments'), / hidden>$/);
+    // Tab links stay on the version shown.
+    assert.match(versions, /href="\/a\/a1\/v\/2\?panel=share" role="tab"/);
+
+    const closed = await get(app, '/a/a1?panel=closed');
+    assert.match(cookie(closed), /^aa_panel=closed;/);
+    const closedBody = await closed.text();
+    assert.match(tag(closedBody, /<aside class="panel"[^>]*>/), / hidden>$/);
+    assert.match(closedBody, /<div class="vbody closed">/);
+    assert.match(
+      closedBody,
+      /href="\/a\/a1\?panel=comments" data-panel-toggle aria-controls="panel" aria-expanded="false"/,
+    );
+
+    const remembered = await app.request(`${APP}/a/a1`, {
+      headers: { ...USER, Cookie: 'aa_panel=details' },
+    });
+    assert.doesNotMatch(pane(await remembered.text(), 'details'), /hidden/);
+    const stillClosed = await app.request(`${APP}/a/a1`, {
+      headers: { ...USER, Cookie: 'aa_panel=closed' },
+    });
+    assert.match(await stillClosed.text(), /<div class="vbody closed">/);
   });
 
   it('returns 404 for unknown artifacts and versions', async () => {
@@ -454,7 +793,11 @@ describe('artifact page', () => {
     assert.equal((await get(app, '/a/nope')).status, 404);
     assert.equal((await get(app, '/a/a1/v/9')).status, 404);
     assert.equal((await get(app, '/a/a1/v/abc')).status, 404);
-    assert.equal((await get(app, '/nowhere')).status, 404);
+    const res = await get(app, '/nowhere');
+    assert.equal(res.status, 404);
+    const body = await res.text();
+    assert.match(body, /<p class="status">404<\/p>/);
+    assert.match(body, /Back to the library/);
   });
 
   it('maps AppError not_found to 404 and other errors to a 500 without details', async () => {
@@ -514,10 +857,13 @@ describe('POST', () => {
     assert.match(body, /data-copy="new-token"/);
     assert.match(body, /shown only once/);
     assert.ok(body.includes('laptop &lt;1&gt;'));
+    // The theme form comes back to the tokens page, not to the POST.
+    assert.match(body, /<input type="hidden" name="back" value="\/settings\/tokens">/);
 
     const list = await (await get(app, '/settings/tokens')).text();
     assert.ok(list.includes('laptop &lt;1&gt;'));
     assert.ok(!list.includes('aa_secret1'));
+    assert.match(list, /<a class="nav on" href="\/settings\/tokens" aria-current="page">/);
   });
 
   it('refuses a token without a name', async () => {
@@ -535,22 +881,67 @@ describe('POST', () => {
   });
 });
 
+describe('rename', () => {
+  it('is a settings-only publish as the signed-in user, back on the Details tab', async () => {
+    const { app, published } = fakeDeps({});
+    const res = await post(
+      app,
+      '/a/a1/settings',
+      { title: 'New <title>', description: 'Desc', version: '3' },
+      APP,
+    );
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), '/a/a1?panel=details');
+    assert.deepEqual(published, [
+      {
+        input: { id: 'a1', title: 'New <title>', description: 'Desc' },
+        by: 'owner@example.com',
+      },
+    ]);
+    const old = await post(app, '/a/a1/settings', { title: 'x', version: '2' }, APP);
+    assert.equal(old.headers.get('location'), '/a/a1/v/2?panel=details');
+  });
+
+  it('refuses an empty title, a foreign Origin and an unknown artifact', async () => {
+    const { app, published } = fakeDeps({});
+    assert.equal((await post(app, '/a/a1/settings', { title: 'x' }, CONTENT)).status, 403);
+    assert.deepEqual(published, []);
+    assert.equal((await post(app, '/a/a1/settings', { title: ' ' }, APP)).status, 400);
+    assert.equal((await post(app, '/a/nope/settings', { title: 'x' }, APP)).status, 404);
+  });
+
+  it('has a rename form in the Details tab', async () => {
+    const { app } = fakeDeps({});
+    const body = await (await get(app, '/a/a1')).text();
+    assert.match(
+      body,
+      /<form method="post" action="\/a\/a1\/settings" class="rename" id="rename">/,
+    );
+    assert.match(body, /name="title" value="&lt;script&gt;alert\(1\)&lt;\/script&gt;" required/);
+  });
+});
+
 describe('restore a version', () => {
-  it('shows the button only on versions that are not the latest', async () => {
+  it('offers Restore on older versions only', async () => {
     const { app } = fakeDeps({});
     const old = await (await get(app, '/a/a1/v/2')).text();
-    assert.match(old, /<form class="inline" method="post" action="\/a\/a1\/v\/2\/restore">/);
-    assert.match(old, /Restore this version/);
+    assert.match(
+      old,
+      /<form method="post" action="\/a\/a1\/v\/2\/restore"><button class="btn sm" type="submit">Restore this version/,
+    );
     const latest = await (await get(app, '/a/a1')).text();
     assert.doesNotMatch(latest, /Restore this version/);
-    assert.doesNotMatch(await (await get(app, '/a/a1/v/3')).text(), /Restore this version/);
+    assert.doesNotMatch(latest, /action="\/a\/a1\/v\/3\/restore"/);
+    assert.match(latest, /action="\/a\/a1\/v\/2\/restore"/);
+    assert.match(latest, /action="\/a\/a1\/v\/1\/restore"/);
+    assert.match(latest, /<a class="btn sm" href="\/a\/a1\/v\/1">.*View<\/a>/);
   });
 
   it('restores as the signed-in user and redirects to the artifact', async () => {
     const { app, restored } = fakeDeps({});
     const res = await post(app, '/a/a1/v/2/restore', {}, APP);
     assert.equal(res.status, 303);
-    assert.equal(res.headers.get('location'), '/a/a1');
+    assert.equal(res.headers.get('location'), '/a/a1?panel=versions');
     assert.deepEqual(restored, [{ id: 'a1', version: 2, publishedBy: 'owner@example.com' }]);
     assert.equal((await post(app, '/a/a1/v/9/restore', {}, APP)).status, 404);
     assert.equal((await post(app, '/a/a1/v/0/restore', {}, APP)).status, 404);
@@ -573,7 +964,7 @@ describe('trash', () => {
     assert.ok(body.includes('Old &lt;i&gt;notes&lt;/i&gt;'));
     assert.match(body, /deleted <time datetime="2026-01-03T00:00:00.000Z"/);
     assert.match(body, /action="\/trash\/gone1\/restore"/);
-    assert.match(body, /<a href="\/trash" aria-current="page">Trash<\/a>/);
+    assert.match(body, /<a class="nav on" href="\/trash" aria-current="page">/);
   });
 
   it('shows an empty trash', async () => {
@@ -602,18 +993,23 @@ describe('connect', () => {
     );
     assert.ok(body.includes('{file:~/.agent-artifacts-token}'));
     assert.match(body, /href="\/settings\/tokens"/);
+    assert.match(body, /<a class="nav on" href="\/connect" aria-current="page">/);
   });
 });
 
 describe('share links', () => {
-  it('shows a share form on the artifact page, collapsed, with the page version to pin', async () => {
+  it('has a share form in the Share tab, with the page version to pin', async () => {
     const { app } = fakeDeps({});
     const body = await (await get(app, '/a/a1/v/2')).text();
-    assert.match(body, /<details class="share">\n<summary>Share<\/summary>/);
-    assert.match(body, /<form method="post" action="\/a\/a1\/share"/);
+    assert.match(body, /<form method="post" action="\/a\/a1\/share" class="share-form">/);
     assert.match(body, /<option value="latest">Always the latest version<\/option>/);
     assert.match(body, /<option value="2">Only version 2<\/option>/);
     assert.match(body, /No public links\./);
+    assert.match(
+      body,
+      /<a class="btn primary" href="\/a\/a1\/v\/2\?panel=share" data-tab-link="share">/,
+    );
+    assert.doesNotMatch(body, /public link<\/a>/);
   });
 
   it('creates a link, shows its URL once with a copy button, then lists it', async () => {
@@ -635,14 +1031,19 @@ describe('share links', () => {
       /<code id="share-url" class="token">https:\/\/content\.test\/p\/sl_secret1\/<\/code>/,
     );
     assert.match(body, /data-copy="share-url"/);
-    assert.match(body, /<details class="share" open>/);
+    // The Share tab is open, and every link on the page points at a GET URL.
+    assert.doesNotMatch(tag(body, /<section class="pbody" id="pane-share"[^>]*>/), /hidden/);
+    assert.match(body, /<input type="hidden" name="back" value="\/a\/a1">/);
     assert.ok(body.includes('mum &lt;3'));
     assert.ok(!body.includes('mum <3'));
 
     const page = await (await get(app, '/a/a1')).text();
     assert.ok(!page.includes('sl_secret1'));
-    assert.match(page, /Share · 1 public link</);
-    assert.match(page, /<td>Latest version<\/td>/);
+    assert.match(
+      page,
+      /<a class="pill pub" href="\/a\/a1\?panel=share" data-tab-link="share">.*1 public link<\/a>/,
+    );
+    assert.match(page, /<small>Latest version · never expires · never opened · created/);
     assert.match(page, /action="\/a\/a1\/share\/l1\/revoke"/);
   });
 
@@ -656,8 +1057,8 @@ describe('share links', () => {
     const expires = Date.parse(input?.expiresAt ?? '');
     assert.ok(expires >= before + 7 * 86_400_000 && expires <= Date.now() + 7 * 86_400_000);
     const body = await res.text();
-    assert.match(body, /Version 2 of 3/);
-    assert.match(body, /<a href="\/a\/a1\/v\/2">Version 2<\/a>/);
+    assert.match(body, /You are viewing <b>v2<\/b>/);
+    assert.match(body, /Pinned to <a href="\/a\/a1\/v\/2">v2<\/a> · expires <time/);
   });
 
   it('refuses a foreign Origin, a bad version or expiry, and an unknown artifact', async () => {
@@ -680,12 +1081,12 @@ describe('share links', () => {
     assert.equal(links.length, 1);
     const res = await post(app, '/a/a1/share/l1/revoke', {}, APP);
     assert.equal(res.status, 303);
-    assert.equal(res.headers.get('location'), '/a/a1');
+    assert.equal(res.headers.get('location'), '/a/a1?panel=share');
     assert.equal(links.length, 0);
     assert.equal((await post(app, '/a/a1/share/l1/revoke', {}, APP)).status, 404);
   });
 
-  it('marks an expired link', async () => {
+  it('marks an expired link, and leaves it out of the count', async () => {
     const { app, links } = fakeDeps({});
     links.push({
       id: 'old',
@@ -697,67 +1098,54 @@ describe('share links', () => {
       lastUsedAt: '2026-01-01T12:00:00.000Z',
     });
     const body = await (await get(app, '/a/a1')).text();
+    assert.match(body, /<li class="link expired">/);
     assert.match(body, /<span class="badge">expired<\/span>/);
+    assert.doesNotMatch(body, /class="pill pub"/);
   });
 });
 
 describe('comments', () => {
-  it('shows an open-comments badge in the list and in search results', async () => {
-    const { app } = fakeDeps({});
-    const list = await (await get(app, '/')).text();
-    assert.match(
-      list,
-      /alert\(1\)&lt;\/script&gt;<\/a>\n.*\n.*\n.*<\/time><\/span><span class="badge" title="Open comment threads">2 open comments<\/span>/,
-    );
-    assert.equal(list.match(/open comment/g)?.length, 1);
-    const search = await (await get(app, '/?q=x')).text();
-    assert.match(search, /2 open comments/);
-  });
-
   it('renders the panel escaped, with threads up to this version', async () => {
     const { app } = fakeDeps({});
     const body = await (await get(app, '/a/a1/v/2')).text();
-    assert.match(body, /<details class="comments" id="comments" open>/);
-    assert.match(body, /<button type="button" id="comment-on-selection" hidden>/);
+    assert.match(body, /<section class="pbody" id="pane-comments" role="tabpanel"/);
+    assert.match(body, /<button type="button" class="sel" id="comment-on-selection" hidden>/);
     assert.ok(body.includes('Fix &lt;script&gt;alert(2)&lt;/script&gt;'));
     assert.ok(!body.includes('<script>alert(2)'));
-    assert.ok(body.includes('agent &lt;x&gt; <span class="badge">agent</span>'));
+    // The owner's own comment says "you"; an agent's says "agent", with a neutral avatar.
+    assert.match(
+      body,
+      /<span class="av" aria-hidden="true">OW<\/span>[\s\S]*?owner@example\.com<span class="you">you<\/span><small>· v2 · <time/,
+    );
+    assert.match(
+      body,
+      /<span class="av bot" aria-hidden="true">AX<\/span>[\s\S]*?agent &lt;x&gt;<span class="agent-tag">agent<\/span>/,
+    );
     assert.ok(body.includes('<blockquote class="quote">Quoted &quot;&lt;b&gt;&quot;</blockquote>'));
     // Started on v3: not shown on v2.
     assert.ok(!body.includes('thread-th-new'));
     assert.ok(!body.includes('Old quote'));
     assert.match(body, /name="version" value="2"/);
-    assert.match(body, /<span class="badge">1 open<\/span>/);
+    assert.match(body, /placeholder="Comment on v2, or select text in the page…"/);
+    assert.match(body, />Comments<span class="n">1<\/span><\/a>/);
+    assert.match(body, /1 open · 0 resolved/);
   });
 
-  it('marks older threads, keeps resolved ones apart, and highlights only open quotes', async () => {
+  it('keeps resolved threads apart, and highlights only open quotes', async () => {
     const { app } = fakeDeps({});
     const body = await (await get(app, '/a/a1')).text();
     assert.match(
       body,
       /id="thread-th-open" data-exact="Quoted &quot;&lt;b&gt;&quot;" data-prefix="before &lt;" data-suffix="&gt; after">/,
     );
-    assert.match(body, /title="Started on version 2">on v2<\/span>/);
     assert.match(body, /<article class="thread done" id="thread-th-done">/);
     assert.match(body, /<details class="resolved"><summary>1 resolved thread<\/summary>/);
+    assert.match(body, /<p class="where">on the whole page · v3<\/p>/);
     assert.equal(body.match(/data-exact=/g)?.length, 1);
     assert.match(body, /value="1">Resolve<\/button>/);
     assert.match(body, /value="0">Reopen<\/button>/);
-    assert.match(body, /<span class="badge">2 open<\/span>/);
-  });
-
-  it('loads its script from /static/app.js, allowed by script-src self', async () => {
-    const { app } = fakeDeps({});
-    const res = await get(app, '/a/a1');
-    const body = await res.text();
-    assert.match(body, /<script src="\/static\/app\.js\?v=[0-9a-f]{12}" defer><\/script>/);
-    assert.equal(body.match(/<script/g)?.length, 1);
-    assert.match(res.headers.get('content-security-policy') ?? '', /script-src 'self';/);
-
-    const js = await get(app, '/static/app.js');
-    assert.equal(js.status, 200);
-    assert.equal(js.headers.get('content-type'), 'text/javascript; charset=utf-8');
-    assert.match(await js.text(), /aa:selection/);
+    assert.match(body, /<button class="btn sm" type="submit" data-reply>Reply<\/button>/);
+    assert.match(body, />Comments<span class="n">2<\/span><\/a>/);
   });
 
   it('posts a note as the signed-in owner, typed, whatever the form says', async () => {
@@ -769,7 +1157,7 @@ describe('comments', () => {
       APP,
     );
     assert.equal(res.status, 303);
-    assert.equal(res.headers.get('location'), '/a/a1/v/2#thread-th-created');
+    assert.equal(res.headers.get('location'), '/a/a1/v/2?panel=comments#thread-th-created');
     assert.deepEqual(added, [
       {
         input: { artifactId: 'a1', body: 'Hello', version: 2, anchor: { kind: 'note' } },
@@ -786,7 +1174,7 @@ describe('comments', () => {
       { body: 'Hm', version: '3', exact: 'Hi', prefix: 'a', suffix: 'b' },
       APP,
     );
-    assert.equal(res.headers.get('location'), '/a/a1#thread-th-created');
+    assert.equal(res.headers.get('location'), '/a/a1?panel=comments#thread-th-created');
     assert.deepEqual(added[0]?.input.anchor, {
       kind: 'text',
       exact: 'Hi',
@@ -803,7 +1191,7 @@ describe('comments', () => {
       { body: 'More', threadId: 'th-open', version: '3', exact: 'ignored' },
       APP,
     );
-    assert.equal(res.headers.get('location'), '/a/a1#thread-th-open');
+    assert.equal(res.headers.get('location'), '/a/a1?panel=comments#thread-th-open');
     assert.deepEqual(added[0]?.input, { artifactId: 'a1', threadId: 'th-open', body: 'More' });
     assert.equal(
       (await post(app, '/a/a1/comments', { body: 'x', threadId: 'nope' }, APP)).status,
@@ -842,7 +1230,7 @@ describe('comments', () => {
       APP,
     );
     assert.equal(res.status, 303);
-    assert.equal(res.headers.get('location'), '/a/a1/v/2#thread-th-open');
+    assert.equal(res.headers.get('location'), '/a/a1/v/2?panel=comments#thread-th-open');
     assert.deepEqual(added[0]?.input, { artifactId: 'a1', threadId: 'th-open', body: 'Thanks' });
     await post(app, '/a/a1/comments/th-open/resolve', { resolved: '0', body: ' ' }, APP);
     assert.equal(added.length, 1);

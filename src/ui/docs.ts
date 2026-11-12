@@ -1,6 +1,6 @@
 import { html } from 'hono/html';
 import { DATA_LIMITS } from '../contracts.ts';
-import { type Html, layout } from './layout.ts';
+import { appShell, type Html, type Shell } from './layout.ts';
 
 /** A complete live page: publish it as html with capabilities { db: true, viewer: true }. */
 export const SAMPLE_POLL = `<!doctype html>
@@ -77,7 +77,7 @@ export const SAMPLE_POLL = `<!doctype html>
 
 const KB = 1024;
 
-export function docsRuntimePage(opts: { user: string }): Html {
+export function docsRuntimePage(opts: { shell: Shell }): Html {
   const publish = JSON.stringify(
     {
       title: 'Lunch poll',
@@ -91,7 +91,7 @@ export function docsRuntimePage(opts: { user: string }): Html {
   const api = `const { ready, theme, onTheme, viewer, db } = window.openArtifacts;
 
 await ready;                                  // the app has answered (outside it: at once)
-theme;                                        // 'light' or 'dark', the system setting
+theme;                                        // 'light' or 'dark', as the app shows it
 onTheme((theme) => {});                       // called when it changes; returns an unsubscribe
 openArtifacts.viewer;                         // { email, name } with the viewer capability, else null
 
@@ -104,14 +104,13 @@ await db.query({ where: { done: false }, orderBy: 'createdAt', order: 'desc', li
 const stop = await db.subscribe(({ docs, deleted, reset }) => {});`;
 
   const block = (id: string, text: string) =>
-    html`<div class="snippet"><pre><code id="${id}">${text}</code></pre><button type="button" data-copy="${id}">Copy</button></div>`;
+    html`<div class="snippet"><pre><code id="${id}">${text}</code></pre><button type="button" class="btn sm copy" data-copy="${id}">Copy</button></div>`;
 
-  return layout({
+  return appShell(opts.shell, {
     title: 'Live pages',
-    user: opts.user,
-    nav: 'connect',
-    body: html`<h1>Live pages</h1>
-<p>An HTML artifact can keep data, such as poll votes, a checklist or a tracker, without ever holding a credential. Its page calls <code>window.openArtifacts</code>; the app's artifact page makes the call for it, signed in as you, and only for that artifact.</p>
+    body: html`<div class="prose">
+<div class="h1row"><h1>Live pages</h1></div>
+<p class="lead">An HTML artifact can keep data, such as poll votes, a checklist or a tracker, without ever holding a credential. Its page calls <code>window.openArtifacts</code>; the app's artifact page makes the call for it, signed in as you, and only for that artifact.</p>
 <h2>Declare capabilities</h2>
 <p>Publish with <code>capabilities</code>. They belong to the artifact, not a version, and a settings-only publish (an <code>id</code> and <code>capabilities</code>, no content) changes them. A call the artifact didn't declare is refused, by the server too.</p>
 <ul>
@@ -137,6 +136,7 @@ ${block('api', api)}
 <p>Agents read and seed the same data over MCP: <code>artifact_data_get</code>, <code>artifact_data_list</code>, <code>artifact_data_query</code>, <code>artifact_data_set</code>, <code>artifact_data_update</code> and <code>artifact_data_delete</code>, for example to read a poll's results.</p>
 <h2>Sample: a poll</h2>
 <p>Publish it as html with <code>capabilities: { db: true, viewer: true }</code>. Each person's vote is one document, named after their email.</p>
-${block('sample-poll', SAMPLE_POLL)}`,
+${block('sample-poll', SAMPLE_POLL)}
+</div>`,
   });
 }

@@ -17,6 +17,7 @@ import { transaction } from './db.ts';
 import { applyEdits, checkEditsInput } from './edits.ts';
 import { hasContent, prepareVersion } from './files.ts';
 import { now, randomId } from './ids.ts';
+import { createLibrary } from './library.ts';
 import { createSearchIndex } from './search.ts';
 
 const EDITABLE: readonly Format[] = ['html', 'markdown', 'code'];
@@ -192,6 +193,7 @@ export function createArtifactService(
   };
 
   const index = createSearchIndex(db, blobs);
+  const library = createLibrary(db, pageLimit);
   const findArtifact = (id: string) => stmt.artifact.get(id) as ArtifactRow | undefined;
 
   const insertVersion = (id: string, version: number, v: NewVersion, by: string, time: string) => {
@@ -384,6 +386,28 @@ export function createArtifactService(
         items: page.map(toArtifact),
         nextCursor: rows.length > limit && last ? encodeCursor(last) : null,
       };
+    },
+
+    async browse(query = {}) {
+      const page = library.browse(query);
+      return {
+        items: page.rows.map((row) => ({
+          artifact: toArtifact(row),
+          entry: row.entry,
+          agent: row.agent,
+          publicLinks: row.public_links,
+          openComments: row.open_comments,
+        })),
+        nextCursor: page.nextCursor,
+      };
+    },
+
+    async count(filter = {}) {
+      return library.count(filter);
+    },
+
+    async summary() {
+      return library.summary();
     },
 
     async search(query) {

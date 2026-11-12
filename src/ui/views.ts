@@ -4,6 +4,8 @@ import {
   COMMENT_LIMITS,
   type DeletedArtifact,
   type Format,
+  type LibraryItem,
+  type LibrarySort,
   type SearchHit,
   type ShareLink,
   type Thread,
@@ -11,40 +13,62 @@ import {
   TRASH_DAYS,
   type Version,
 } from '../contracts.ts';
-import { type Html, layout } from './layout.ts';
+import {
+  appShell,
+  type Html,
+  htmlPage,
+  icon,
+  initials,
+  type Shell,
+  searchBox,
+  type Theme,
+  themeSwitch,
+} from './layout.ts';
 
-export const FORMATS: readonly Format[] = ['html', 'markdown', 'code', 'pdf', 'image'];
+export const FORMATS: readonly Format[] = ['html', 'markdown', 'code', 'image', 'pdf'];
+
+export const FORMAT_LABELS: Record<Format, string> = {
+  html: 'HTML',
+  markdown: 'Markdown',
+  code: 'Code',
+  image: 'Image',
+  pdf: 'PDF',
+};
 
 const SANDBOX =
   'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-downloads allow-modals';
 
-const current = (on: boolean) => (on ? raw(' aria-current="page"') : '');
+const MONTHS = 'Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec'.split(' ');
 
-export function relativeTime(iso: string, now = Date.now()): string {
-  const seconds = Math.round((now - Date.parse(iso)) / 1000);
-  if (Number.isNaN(seconds)) return iso;
-  if (seconds < 45) return 'just now';
-  const steps: [number, string][] = [
-    [60, 'minute'],
-    [60 * 60, 'hour'],
-    [60 * 60 * 24, 'day'],
-  ];
-  if (seconds < 60 * 60 * 24 * 30) {
-    let n = 0;
-    let unit = '';
-    for (const [size, name] of steps) {
-      if (seconds >= size * 0.75) {
-        n = Math.max(1, Math.round(seconds / size));
-        unit = name;
-      }
-    }
-    return `${n} ${unit}${n === 1 ? '' : 's'} ago`;
-  }
-  return iso.slice(0, 10);
+/** "just now", "5m ago", "3h ago", "Yesterday", "4d ago", "Oct 28", "Oct 28, 2025" (UTC). */
+export function shortTime(iso: string, now = Date.now()): string {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return iso;
+  const minutes = Math.floor((now - ms) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 2) return 'Yesterday';
+  if (days < 7) return `${days}d ago`;
+  const date = new Date(ms);
+  const day = `${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}`;
+  return date.getUTCFullYear() === new Date(now).getUTCFullYear()
+    ? day
+    : `${day}, ${date.getUTCFullYear()}`;
 }
 
-const time = (iso: string) =>
-  html`<time datetime="${iso}" title="${iso}">${relativeTime(iso)}</time>`;
+/** A date for "expires …": "Nov 19" or "Nov 19, 2027" (UTC). */
+const shortDate = (iso: string) => {
+  const date = new Date(iso);
+  const day = `${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}`;
+  return date.getUTCFullYear() === new Date().getUTCFullYear()
+    ? day
+    : `${day}, ${date.getUTCFullYear()}`;
+};
+
+const time = (iso: string) => html`<time datetime="${iso}" title="${iso}">${shortTime(iso)}</time>`;
 
 function size(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -52,89 +76,202 @@ function size(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-const copyButton = (target: string) =>
-  html`<button type="button" data-copy="${target}">Copy</button>`;
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-export function messagePage(user: string | null, title: string, message: string): Html {
-  return layout({
-    title,
-    user,
-    body: html`<h1>${title}</h1><p class="muted">${message}</p>${user ? html`<p><a href="/">Back to artifacts</a></p>` : ''}`,
-  });
-}
+const current = (on: boolean) => (on ? raw(' aria-current="page"') : '');
+
+const copyButton = (target: string) =>
+  html`<button type="button" class="btn sm copy" data-copy="${target}">Copy</button>`;
+
+const snippet = (id: string, text: string) =>
+  html`<div class="snippet"><pre><code id="${id}">${text}</code></pre>${copyButton(id)}</div>`;
 
 /** The snippet is escaped like any text; only its «…» match markers become <mark>. */
-export function highlight(snippet: string): Html {
-  const parts = snippet.split(/«([^«»]*)»/);
+export function highlight(text: string): Html {
+  const parts = text.split(/«([^«»]*)»/);
   return html`${parts.map((part, i) => (i % 2 === 1 ? html`<mark>${part}</mark>` : part))}`;
 }
 
-const searchBox = (query: string) =>
-  html`<form class="search" method="get" action="/" role="search">
-<input type="search" name="q" value="${query}" placeholder="Search artifacts" maxlength="200" aria-label="Search artifacts">
-<button type="submit">Search</button>
-</form>`;
+const formatIcon = (format: Format) => icon(format);
 
-const versionCount = (a: Artifact) =>
-  html`<span class="meta">${a.latestVersion} version${a.latestVersion === 1 ? '' : 's'}</span>`;
+// ---- Pills ----
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
-/** Open comment threads per artifact id. */
-export type OpenCounts = Record<string, number>;
-
-const openBadge = (n: number | undefined) =>
+const commentsPill = (n: number) =>
   n
-    ? html`<span class="badge" title="Open comment threads">${plural(n, 'open comment')}</span>`
+    ? html`<span class="pill cmt" title="${plural(n, 'open comment thread')}">${icon('cmt')}${n}</span>`
+    : '';
+const livePill = (a: Artifact) =>
+  a.capabilities.db ? html`<span class="pill live">${icon('live')}Live</span>` : '';
+const publicPill = (n: number) =>
+  n
+    ? html`<span class="pill pub" title="${plural(n, 'public link')}">${icon('globe')}Public</span>`
     : '';
 
-export function listPage(opts: {
-  user: string;
-  items: Artifact[];
+// ---- Library ----
+
+export type LibraryTab = 'all' | 'live' | 'shared' | 'comments';
+export const LIBRARY_TABS: readonly LibraryTab[] = ['all', 'live', 'shared', 'comments'];
+const TAB_LABELS: Record<LibraryTab, string> = {
+  all: 'All',
+  live: 'Live',
+  shared: 'Shared publicly',
+  comments: 'Open comments',
+};
+
+export type LibraryView = 'grid' | 'list';
+
+/** What the library shows; it all lives in the URL except the view, which a cookie keeps. */
+export type LibraryState = {
+  tab: LibraryTab;
+  format?: Format;
+  agent?: string;
+  sort: LibrarySort;
+  view: LibraryView;
+};
+
+/** The library URL for a state, leaving out defaults; `view` only when asked for. */
+export function libraryHref(
+  state: LibraryState,
+  change: Partial<LibraryState> & { cursor?: string } = {},
+  withView = false,
+): string {
+  const s = { ...state, ...change };
+  const params = new URLSearchParams();
+  if (s.tab !== 'all') params.set('tab', s.tab);
+  if (s.format) params.set('format', s.format);
+  if (s.agent) params.set('agent', s.agent);
+  if (s.sort !== 'updated') params.set('sort', s.sort);
+  if (withView) params.set('view', s.view);
+  if (change.cursor) params.set('cursor', change.cursor);
+  const query = params.toString();
+  return query ? `/?${query}` : '/';
+}
+
+const menu = (summary: Html, items: Html, opts: { right?: boolean; label?: string } = {}) =>
+  html`<details class="menu"${opts.label ? html` data-label="${opts.label}"` : ''}><summary>${summary}</summary><div class="menu-pop${opts.right ? ' right' : ''}">${items}</div></details>`;
+
+const menuItem = (href: string, label: string | Html, on: boolean) =>
+  html`<a class="menu-item${on ? ' on' : ''}" href="${href}"${current(on)}>${label}</a>`;
+
+function card(item: LibraryItem, preview: string | null): Html {
+  const a = item.artifact;
+  const thumb = preview
+    ? html`<div class="thumb"><div class="mini"><iframe src="${preview}" sandbox="" loading="lazy" tabindex="-1" aria-hidden="true" title=""></iframe></div></div>`
+    : html`<div class="thumb tile">${formatIcon(a.format)}<b>${a.title}</b></div>`;
+  return html`<article class="card">
+${thumb}
+<h2 class="ctitle">${formatIcon(a.format)}<a class="stretch" href="/a/${encodeURIComponent(a.id)}">${a.title}</a></h2>
+<div class="meta"><span class="agent">${item.agent}</span>${commentsPill(item.openComments)}${livePill(a)}${publicPill(item.publicLinks)}<span class="t">${time(a.updatedAt)}</span></div>
+</article>`;
+}
+
+const subline = (a: Artifact) =>
+  `${a.description.split('\n')[0]?.trim() || FORMAT_LABELS[a.format]} · v${a.latestVersion}`;
+
+function row(item: LibraryItem): Html {
+  const a = item.artifact;
+  return html`<article class="row">
+${formatIcon(a.format)}
+<div class="row-main"><a class="ttl stretch" href="/a/${encodeURIComponent(a.id)}">${a.title}</a><div class="sub">${subline(a)}</div></div>
+<div class="row-pills">${commentsPill(item.openComments)}${livePill(a)}${publicPill(item.publicLinks)}</div>
+<div class="sub row-agent">${item.agent}</div>
+<div class="sub t">${time(a.updatedAt)}</div>
+</article>`;
+}
+
+export function libraryPage(opts: {
+  shell: Shell;
+  state: LibraryState;
+  items: LibraryItem[];
   nextCursor: string | null;
-  format: Format | undefined;
-  openComments: OpenCounts;
+  counts: Record<LibraryTab, number>;
+  /** Signed URL of an item's entry for its preview, or null for the format tile. */
+  preview: (item: LibraryItem) => string | null;
 }): Html {
-  const chipHref = (f: Format | undefined) => (f ? `/?format=${f}` : '/');
-  const chips = html`<nav class="chips" aria-label="Filter by format">
-<a href="/"${current(!opts.format)}>All</a>
-${FORMATS.map((f) => html`<a href="${chipHref(f)}"${current(opts.format === f)}>${f}</a>`)}
-</nav>`;
+  const { state, counts } = opts;
+  const filtered = Boolean(state.format || state.agent);
+  const shown = counts[state.tab];
 
-  const moreHref = opts.nextCursor
-    ? `/?${new URLSearchParams({ ...(opts.format ? { format: opts.format } : {}), cursor: opts.nextCursor })}`
-    : null;
+  const tabs = html`<nav class="tabs" aria-label="Show">${LIBRARY_TABS.map(
+    (tab) =>
+      html`<a class="tab${tab === state.tab ? ' on' : ''}" href="${libraryHref(state, { tab })}"${current(tab === state.tab)}>${TAB_LABELS[tab]}<span class="n">${counts[tab]}</span></a>`,
+  )}</nav>`;
 
-  const body =
+  const formatMenu = menu(
+    html`<span class="chip${state.format ? ' set' : ''}">${icon('filter')}Format${state.format ? html`<b>${FORMAT_LABELS[state.format]}</b>${icon('chev')}` : ''}</span>`,
+    html`${menuItem(libraryHref(state, { format: undefined }), 'All formats', !state.format)}${FORMATS.map(
+      (f) =>
+        menuItem(
+          libraryHref(state, { format: f }),
+          html`${formatIcon(f)}${FORMAT_LABELS[f]}`,
+          state.format === f,
+        ),
+    )}`,
+    { label: 'Format' },
+  );
+  const agents = opts.shell.summary.agents;
+  const agentMenu = menu(
+    html`<span class="chip${state.agent ? ' set' : ''}">Agent${state.agent ? html`<b>${state.agent}</b>` : ''}${icon('chev')}</span>`,
+    html`${menuItem(libraryHref(state, { agent: undefined }), 'All agents', !state.agent)}${agents.map(
+      (a) =>
+        menuItem(
+          libraryHref(state, { agent: a.name }),
+          html`<span class="label">${a.name}</span><span class="n">${a.count}</span>`,
+          state.agent === a.name,
+        ),
+    )}`,
+    { label: 'Agent' },
+  );
+  const sortMenu = menu(
+    html`<span class="btn ghost">${state.sort === 'title' ? 'Title' : 'Last updated'}${icon('chev')}</span>`,
+    html`${menuItem(libraryHref(state, { sort: 'updated' }), 'Last updated', state.sort === 'updated')}${menuItem(libraryHref(state, { sort: 'title' }), 'Title', state.sort === 'title')}`,
+    { right: true, label: 'Sort' },
+  );
+  const viewToggle = html`<span class="seg" role="group" aria-label="View">
+<a href="${libraryHref(state, { view: 'grid' }, true)}" aria-label="Grid" title="Grid"${state.view === 'grid' ? raw(' aria-current="true" class="on"') : ''}>${icon('grid')}</a><a href="${libraryHref(state, { view: 'list' }, true)}" aria-label="List" title="List"${state.view === 'list' ? raw(' aria-current="true" class="on"') : ''}>${icon('rows')}</a>
+</span>`;
+
+  const filters = html`<div class="filters">
+${formatMenu}${agentMenu}
+${filtered ? html`<a class="clear" href="${libraryHref(state, { format: undefined, agent: undefined })}">Clear filters</a>` : ''}
+<span class="sp"></span>
+${sortMenu}${viewToggle}
+</div>`;
+
+  const empty =
+    counts.all === 0 && !filtered
+      ? html`<div class="empty">${icon('plug', 'big')}<h2>No artifacts yet</h2>
+<p class="muted"><a href="/connect">Connect an agent</a> and ask it to publish something.</p></div>`
+      : html`<div class="empty">${icon('filter', 'big')}<h2>Nothing here</h2>
+<p class="muted">No artifacts match${state.tab === 'all' ? '' : html` <strong>${TAB_LABELS[state.tab]}</strong>`}${state.format ? html` in <strong>${FORMAT_LABELS[state.format]}</strong>` : ''}${state.agent ? html` from <strong>${state.agent}</strong>` : ''}. <a href="/">Show everything</a></p></div>`;
+
+  const items =
     opts.items.length === 0
-      ? html`<div class="empty"><p>No artifacts${opts.format ? html` in <strong>${opts.format}</strong>` : ''} yet.</p>
-<p><a href="/connect">Connect an agent</a> and ask it to publish something.</p></div>`
-      : html`<ul class="list">
-${opts.items.map(
-  (a) => html`<li>
-<a class="title" href="/a/${encodeURIComponent(a.id)}">${a.title}</a>
-<span class="badge">${a.format}</span>
-${versionCount(a)}
-<span class="meta">${time(a.updatedAt)}</span>${openBadge(opts.openComments[a.id])}
-</li>`,
-)}
-</ul>
-${moreHref ? html`<p class="more"><a href="${moreHref}">Load more</a></p>` : ''}`;
+      ? empty
+      : state.view === 'grid'
+        ? html`<div class="grid">${opts.items.map((item) => card(item, opts.preview(item)))}</div>`
+        : html`<div class="list">${opts.items.map(row)}</div>`;
 
-  return layout({
-    title: 'Artifacts',
-    user: opts.user,
-    nav: 'artifacts',
-    body: html`<h1>Artifacts</h1>${searchBox('')}${chips}${body}`,
+  const more = opts.nextCursor
+    ? html`<p class="more"><a class="btn" href="${libraryHref(state, { cursor: opts.nextCursor })}">Load more</a></p>`
+    : '';
+
+  return appShell(opts.shell, {
+    title: 'Library',
+    body: html`<div class="h1row"><h1>Library</h1><span class="count">${plural(shown, 'artifact')}</span></div>
+${tabs}
+${filters}
+${items}
+${more}`,
   });
 }
 
 export function searchPage(opts: {
-  user: string;
+  shell: Shell;
   query: string;
   hits: SearchHit[];
   nextCursor: string | null;
-  openComments: OpenCounts;
+  openComments: Record<string, number>;
 }): Html {
   const moreHref = opts.nextCursor
     ? `/?${new URLSearchParams({ q: opts.query, cursor: opts.nextCursor })}`
@@ -142,32 +279,37 @@ export function searchPage(opts: {
 
   const body =
     opts.hits.length === 0
-      ? html`<div class="empty"><p>Nothing matches <strong>${opts.query}</strong>.</p></div>`
-      : html`<ul class="list">
+      ? html`<div class="empty">${icon('search', 'big')}<h2>No results</h2><p class="muted">Nothing matches <strong>${opts.query}</strong>.</p></div>`
+      : html`<div class="list">
 ${opts.hits.map(
-  ({ artifact: a, snippet }) => html`<li>
-<a class="title" href="/a/${encodeURIComponent(a.id)}">${a.title}</a>
-<span class="badge">${a.format}</span>
-${versionCount(a)}
-<span class="meta">${time(a.updatedAt)}</span>${openBadge(opts.openComments[a.id])}
-${snippet ? html`<p class="hit">${highlight(snippet)}</p>` : ''}
-</li>`,
+  ({ artifact: a, snippet: text }) => html`<article class="row">
+${formatIcon(a.format)}
+<div class="row-main"><a class="ttl stretch" href="/a/${encodeURIComponent(a.id)}">${a.title}</a><div class="sub">${subline(a)}</div>
+${text ? html`<p class="hit">${highlight(text)}</p>` : ''}</div>
+<div class="row-pills">${commentsPill(opts.openComments[a.id] ?? 0)}${livePill(a)}</div>
+<div class="sub row-agent">${FORMAT_LABELS[a.format]}</div>
+<div class="sub t">${time(a.updatedAt)}</div>
+</article>`,
 )}
-</ul>
-${moreHref ? html`<p class="more"><a href="${moreHref}">More results</a></p>` : ''}`;
+</div>
+${moreHref ? html`<p class="more"><a class="btn" href="${moreHref}">More results</a></p>` : ''}`;
 
-  return layout({
+  return appShell(opts.shell, {
     title: `Search: ${opts.query}`,
-    user: opts.user,
-    nav: 'artifacts',
-    body: html`<h1>Artifacts</h1>${searchBox(opts.query)}
-<p class="muted">Results for <strong>${opts.query}</strong> · <a href="/">Show all</a></p>
+    body: html`<div class="h1row"><h1>Search</h1><span class="count">Results for <strong>${opts.query}</strong> · <a href="/">Back to the library</a></span></div>
 ${body}`,
   });
 }
 
+// ---- Artifact page ----
+
+export type PanelTab = 'versions' | 'comments' | 'share' | 'details';
+export const PANEL_TABS: readonly PanelTab[] = ['versions', 'comments', 'share', 'details'];
+
 export function artifactPage(opts: {
   user: string;
+  name: string;
+  theme: Theme;
   artifact: Artifact;
   version: Version;
   versions: Version[];
@@ -177,102 +319,193 @@ export function artifactPage(opts: {
   createdLink?: { url: string; link: ShareLink };
   /** The signed-in user, for the frame's runtime; only when the artifact declares `viewer`. */
   viewer?: { email: string; name: string } | null;
+  panel: { tab: PanelTab; open: boolean };
+  /** Shown once in the Details tab after a rename, or a refused one. */
+  notice?: string;
 }): Html {
   const { artifact: a, version: v } = opts;
-  const entryUrl = opts.url(v.entry);
+  const id = encodeURIComponent(a.id);
   const isLatest = v.version === a.latestVersion;
+  // The page's own URL, so tab links work on the URL a form posted to as well.
+  const self = `/a/${id}${isLatest ? '' : `/v/${v.version}`}`;
+  const tabHref = (tab: PanelTab | 'closed') => `${self}?panel=${tab}`;
+  const entryUrl = opts.url(v.entry);
+  const now = Date.now();
+  const activeLinks = opts.shareLinks.filter(
+    (l) => !l.expiresAt || Date.parse(l.expiresAt) > now,
+  ).length;
+  const shown = opts.threads.filter((t) => t.version <= v.version);
+  const open = shown.filter((t) => !t.resolvedAt);
 
-  const switcher = html`<details class="menu">
-<summary>Version ${v.version}${isLatest ? ' (latest)' : ''} of ${a.latestVersion}</summary>
-<ul>
-${opts.versions.map(
-  (x) =>
-    html`<li><a href="/a/${encodeURIComponent(a.id)}/v/${x.version}"${current(x.version === v.version)}>v${x.version} · ${x.publishedBy} · <time datetime="${x.createdAt}" title="${x.createdAt}">${relativeTime(x.createdAt)}</time></a></li>`,
-)}
-</ul>
-</details>`;
+  const caps = a.capabilities;
+  const declared = (['db', 'viewer'] as const).filter((k) => caps[k]);
 
-  const files =
-    v.files.length > 1
-      ? html`<details class="files"><summary>${v.files.length} files</summary><ul>
-${v.files.map(
-  (f) =>
-    html`<li><a href="${opts.url(f.path)}" target="_blank" rel="noopener noreferrer">${f.path}</a> <span class="muted">${size(f.size)}</span></li>`,
-)}
-</ul></details>`
-      : '';
+  const versionMenu = html`<details class="menu vmenu"><summary class="vsel" aria-label="Version"><b>v${v.version}</b><span class="muted">· ${shortTime(v.createdAt)}</span>${icon('chev')}</summary>
+<div class="menu-pop right">${opts.versions.map((x) =>
+    menuItem(
+      `/a/${id}${x.version === a.latestVersion ? '' : `/v/${x.version}`}`,
+      html`<b>v${x.version}</b><span class="label">${x.publishedBy}</span><span class="n">${shortTime(x.createdAt)}</span>`,
+      x.version === v.version,
+    ),
+  )}</div></details>`;
+
+  const moreMenu = html`<details class="menu"><summary class="btn icon" aria-label="More">${icon('more')}</summary>
+<div class="menu-pop right">
+<a class="menu-item" href="${tabHref('details')}" data-tab-link="details">${icon('pencil')}Rename</a>
+<form method="post" action="/a/${id}/delete" data-confirm="Move this artifact to the trash? It stays there for ${TRASH_DAYS} days."><button class="menu-item danger" type="submit">${icon('trash')}Move to trash</button></form>
+</div></details>`;
+
+  const tbar = html`<div class="tbar">
+${formatIcon(v.format)}<h1 class="title">${a.title}</h1><span class="muted fmt">${FORMAT_LABELS[v.format]}</span>
+${declared.length ? html`<a class="pill live" href="/docs/runtime" title="Live page: ${declared.join(', ')}">${icon('live')}Live</a>` : ''}
+${activeLinks ? html`<a class="pill pub" href="${tabHref('share')}" data-tab-link="share">${icon('globe')}${plural(activeLinks, 'public link')}</a>` : ''}
+<span class="sp"></span>
+${versionMenu}
+<a class="btn ghost raw" href="${entryUrl}" target="_blank" rel="noopener noreferrer">${icon('ext')}<span>Open raw</span></a>
+<a class="btn primary" href="${tabHref('share')}" data-tab-link="share">${icon('share')}<span>Share</span></a>
+${moreMenu}
+<a class="btn icon" href="${tabHref(opts.panel.open ? 'closed' : opts.panel.tab)}" data-panel-toggle aria-controls="panel" aria-expanded="${String(opts.panel.open)}" aria-label="Side panel" title="Side panel">${icon('panel')}</a>
+</div>`;
+
+  const oldBar = isLatest
+    ? ''
+    : html`<div class="oldbar">${icon('restore')}<span>You are viewing <b>v${v.version}</b>; the latest is v${a.latestVersion}.</span>
+<a class="btn sm" href="/a/${id}">View latest</a>
+<form method="post" action="/a/${id}/v/${v.version}/restore"><button class="btn sm" type="submit">Restore this version</button></form></div>`;
 
   // Chrome refuses to render PDFs in sandboxed frames, so PDFs get none. Without allow-same-origin
   // the other formats run in an opaque origin; the content host is a separate origin either way.
   const sandbox = v.format === 'pdf' ? '' : html` sandbox="${SANDBOX}"`;
   // For app.js, which answers the frame's runtime calls for this artifact only.
-  const caps = a.capabilities;
   const runtime = html` data-artifact="${a.id}" data-capabilities="${JSON.stringify(caps)}"${
     opts.viewer ? html` data-viewer="${JSON.stringify(opts.viewer)}"` : ''
   }`;
-  const declared = (['db', 'viewer'] as const).filter((k) => caps[k]);
 
-  return layout({
-    title: a.title,
-    user: opts.user,
-    wide: true,
-    body: html`<h1>${a.title}</h1>
-${a.description ? html`<p class="desc">${a.description}</p>` : ''}
-<div class="bar">
-<span class="badge">${v.format}</span>
-${declared.length ? html`<a class="badge" href="/docs/runtime" title="Capabilities this live page declares">live: ${declared.join(', ')}</a>` : ''}
-${switcher}
-<span class="muted">${v.publishedBy} · ${time(v.createdAt)}</span>
-<a href="${entryUrl}" target="_blank" rel="noopener noreferrer">Open in new tab</a>
-${isLatest ? '' : html`<form class="inline" method="post" action="/a/${encodeURIComponent(a.id)}/v/${v.version}/restore"><button type="submit">Restore this version</button></form>`}
-<form class="inline" method="post" action="/a/${encodeURIComponent(a.id)}/delete" data-confirm="Delete this artifact? It stays in the trash for ${TRASH_DAYS} days."><button class="danger" type="submit">Delete</button></form>
+  const tab = (name: PanelTab, label: string, badge?: number) => {
+    const on = name === opts.panel.tab;
+    return html`<a class="ptab${on ? ' on' : ''}" href="${tabHref(name)}" role="tab" id="tab-${name}" aria-controls="pane-${name}" aria-selected="${String(on)}" data-tab="${name}">${label}${badge ? html`<span class="n">${badge}</span>` : ''}</a>`;
+  };
+  const pane = (name: PanelTab, body: Html) =>
+    html`<section class="pbody" id="pane-${name}" role="tabpanel" aria-labelledby="tab-${name}" data-pane="${name}"${name === opts.panel.tab ? '' : raw(' hidden')}>${body}</section>`;
+
+  const panel = html`<aside class="panel" id="panel" aria-label="Artifact panel"${opts.panel.open ? '' : raw(' hidden')}>
+<div class="ptabs" role="tablist">
+${tab('versions', 'Versions')}${tab('comments', 'Comments', open.length)}${tab('share', 'Share')}${tab('details', 'Details')}
+<span class="sp"></span>
+<a class="btn ghost icon sm" href="${tabHref('closed')}" data-panel-close aria-label="Close panel">${icon('x')}</a>
 </div>
-${files}
-${shareSection(a, v, opts.shareLinks, opts.createdLink)}
-<div class="viewer">
+${pane('versions', versionsPane(a, v, opts.versions))}
+${pane('comments', commentsPane(a, v, opts.threads, opts.user, opts.name))}
+${pane('share', sharePane(a, v, opts.shareLinks, opts.createdLink))}
+${pane('details', detailsPane(a, v, opts.versions, opts.url, opts.notice))}
+</aside>`;
+
+  return htmlPage({
+    title: a.title,
+    theme: opts.theme,
+    bodyClass: 'viewer-page',
+    body: html`<div class="viewer">
+<header class="vtop">
+<a class="btn ghost icon" href="/" aria-label="Back to the library">${icon('back')}</a>
+<nav class="crumbs" aria-label="Breadcrumbs"><a href="/"><span class="logo sm">${icon('lib')}</span>Library</a><span aria-hidden="true">/</span><b>${a.title}</b></nav>
+<span class="sp"></span>
+${searchBox('', true)}
+<details class="menu"><summary class="av-btn" aria-label="Account and theme"><span class="av sm">${initials(opts.name)}</span></summary>
+<div class="menu-pop right account"><div class="who-text"><span class="who-name">${opts.name}</span><small>${opts.user}</small></div>${themeSwitch(opts.theme, self)}</div></details>
+</header>
+${tbar}
+${oldBar}
+<div class="vbody${opts.panel.open ? '' : ' closed'}">
 <div class="frame">
 <iframe class="artifact" src="${entryUrl}" title="${a.title}"${sandbox}${runtime}></iframe>
-<button type="button" id="comment-on-selection" hidden>Comment on selection</button>
+<button type="button" class="sel" id="comment-on-selection" hidden>${icon('cmt')}Comment</button>
 </div>
-${commentsPanel(a, v, opts.threads)}
+${panel}
+</div>
 </div>`,
   });
 }
 
-export function trashPage(opts: { user: string; items: DeletedArtifact[] }): Html {
-  const body =
-    opts.items.length === 0
-      ? html`<div class="empty"><p>The trash is empty.</p></div>`
-      : html`<ul class="list">
-${opts.items.map(
-  (a) => html`<li>
-<span class="title">${a.title}</span>
-<span class="badge">${a.format}</span>
-<span class="meta">deleted ${time(a.deletedAt)}</span>
-<form class="inline" method="post" action="/trash/${encodeURIComponent(a.id)}/restore"><button type="submit">Restore</button></form>
-</li>`,
-)}
-</ul>`;
+function versionsPane(a: Artifact, v: Version, versions: Version[]): Html {
+  const id = encodeURIComponent(a.id);
+  return html`<div class="phead"><span>${plural(versions.length, 'version')}</span></div>
+<ol class="timeline">
+${versions.map((x) => {
+  const latest = x.version === a.latestVersion;
+  const viewing = x.version === v.version;
+  const href = `/a/${id}${latest ? '' : `/v/${x.version}`}`;
+  return html`<li class="ver${latest ? ' cur' : ''}${viewing ? ' viewing' : ''}">
+<div class="l1"><b>v${x.version}</b>${latest ? html`<span class="tag">Current</span>` : ''}${viewing && !latest ? html`<span class="tag soft">Viewing</span>` : ''}<span class="t">${time(x.createdAt)}</span></div>
+<div class="by"><span class="dot"></span><span class="label">${x.publishedBy}</span>${x.files.length > 1 ? html`<span>· ${x.files.length} files</span>` : ''}</div>
+${
+  viewing && latest
+    ? ''
+    : html`<div class="acts">${viewing ? '' : html`<a class="btn sm" href="${href}">${icon('eye')}View</a>`}${latest ? '' : html`<form method="post" action="/a/${id}/v/${x.version}/restore"><button class="btn sm" type="submit">${icon('restore')}Restore</button></form>`}</div>`
+}
+</li>`;
+})}
+</ol>`;
+}
 
-  return layout({
-    title: 'Trash',
-    user: opts.user,
-    nav: 'trash',
-    body: html`<h1>Trash</h1>
-<p class="muted">Deleted artifacts are kept for ${TRASH_DAYS} days, then deleted for good.</p>
-${body}`,
-  });
+/**
+ * Threads started on this version or an earlier one, open ones first. Every form is a plain POST to
+ * the app origin. Only open text threads carry data-exact: app.js asks the frame to highlight those.
+ */
+function commentsPane(a: Artifact, v: Version, threads: Thread[], user: string, name: string) {
+  const shown = threads.filter((t) => t.version <= v.version);
+  const open = shown.filter((t) => !t.resolvedAt);
+  const resolved = shown.filter((t) => t.resolvedAt);
+  const action = `/a/${encodeURIComponent(a.id)}/comments`;
+  const version = html`<input type="hidden" name="version" value="${v.version}">`;
+
+  const thread = (t: Thread) => {
+    const quote = t.anchor.kind === 'text' ? t.anchor : null;
+    const highlight =
+      quote && !t.resolvedAt
+        ? html` data-exact="${quote.exact}" data-prefix="${quote.prefix}" data-suffix="${quote.suffix}"`
+        : '';
+    const where = `${quote ? '' : 'on the whole page · '}v${t.version}`;
+    return html`<article class="thread${t.resolvedAt ? ' done' : ''}" id="thread-${t.id}"${highlight}>
+${quote ? html`<blockquote class="quote">${quote.exact}</blockquote>` : html`<p class="where">${where}</p>`}
+<ol class="cmts">
+${t.comments.map((c, i) => {
+  const you = c.typed && c.author === user;
+  return html`<li class="cmt"><span class="av${c.typed ? '' : ' bot'}" aria-hidden="true">${initials(you ? name : c.author)}</span><div class="cmt-body">
+<div class="who2">${you ? name : c.author}${c.typed ? html`<span class="you">${you ? 'you' : 'typed'}</span>` : html`<span class="agent-tag">agent</span>`}<small>· ${i === 0 && quote ? `v${t.version} · ` : ''}${time(c.createdAt)}</small></div>
+<p class="text">${c.body}</p></div></li>`;
+})}
+</ol>
+<form class="reply" method="post" action="${action}">
+<input type="hidden" name="threadId" value="${t.id}">${version}
+<textarea name="body" rows="2" required maxlength="${COMMENT_LIMITS.body}" placeholder="Reply…" aria-label="Reply"></textarea>
+<div class="acts"><button class="btn sm" type="submit" data-reply>Reply</button>
+<button class="btn sm" type="submit" formaction="${action}/${encodeURIComponent(t.id)}/resolve" formnovalidate name="resolved" value="${t.resolvedAt ? '0' : '1'}">${t.resolvedAt ? 'Reopen' : 'Resolve'}</button></div>
+</form>
+</article>`;
+  };
+
+  return html`<div class="phead"><span>${open.length} open · ${resolved.length} resolved</span></div>
+${open.length === 0 ? html`<p class="note">No open comments. Select text in the page to comment on it.</p>` : open.map(thread)}
+${resolved.length ? html`<details class="resolved"><summary>${plural(resolved.length, 'resolved thread')}</summary>${resolved.map(thread)}</details>` : ''}
+<form method="post" action="${action}" id="new-comment" class="new-comment">
+${version}
+<input type="hidden" name="exact"><input type="hidden" name="prefix"><input type="hidden" name="suffix">
+<div class="new-quote" id="new-quote" hidden><blockquote class="quote" id="new-quote-text"></blockquote>
+<button type="button" class="btn ghost icon sm" id="new-quote-clear" aria-label="Remove quote" title="Remove quote">${icon('x')}</button></div>
+<textarea class="box" name="body" rows="3" required maxlength="${COMMENT_LIMITS.body}" placeholder="Comment on v${v.version}, or select text in the page…" aria-label="Comment on version ${v.version}"></textarea>
+<div class="form-end"><button class="btn primary sm" type="submit">Comment</button></div>
+</form>`;
 }
 
 const EXPIRY_CHOICES: [string, string][] = [
-  ['', 'Never expires'],
-  ['1', 'Expires in 1 day'],
-  ['7', 'Expires in 7 days'],
-  ['30', 'Expires in 30 days'],
-  ['90', 'Expires in 90 days'],
+  ['', 'Never'],
+  ['1', 'In 1 day'],
+  ['7', 'In 7 days'],
+  ['30', 'In 30 days'],
+  ['90', 'In 90 days'],
 ];
 
-function shareSection(
+function sharePane(
   a: Artifact,
   v: Version,
   links: ShareLink[],
@@ -286,106 +519,107 @@ function shareSection(
 </div>`
     : '';
 
-  const expires = (l: ShareLink) => {
-    if (!l.expiresAt) return html`<span class="muted">never</span>`;
-    if (Date.parse(l.expiresAt) <= Date.now()) return html`<span class="badge">expired</span>`;
-    return html`<time datetime="${l.expiresAt}" title="${l.expiresAt}">${l.expiresAt.slice(0, 16).replace('T', ' ')} UTC</time>`;
+  const describe = (l: ShareLink) => {
+    const expired = l.expiresAt !== null && Date.parse(l.expiresAt) <= Date.now();
+    const shows =
+      l.version === null
+        ? 'Latest version'
+        : html`Pinned to <a href="${base}/v/${l.version}">v${l.version}</a>`;
+    const expires = !l.expiresAt
+      ? 'never expires'
+      : expired
+        ? html`expired <time datetime="${l.expiresAt}" title="${l.expiresAt}">${shortDate(l.expiresAt)}</time>`
+        : html`expires <time datetime="${l.expiresAt}" title="${l.expiresAt}">${shortDate(l.expiresAt)}</time>`;
+    const used = l.lastUsedAt ? html`opened ${time(l.lastUsedAt)}` : 'never opened';
+    return html`<li class="link${expired ? ' expired' : ''}">
+<div class="l1">${icon('globe')}<span class="label">${l.label || 'Public link'}</span>${expired ? html`<span class="badge">expired</span>` : ''}
+<form method="post" action="${base}/share/${encodeURIComponent(l.id)}/revoke" data-confirm="Revoke this link? Anyone using it loses access."><button class="btn sm" type="submit">Revoke</button></form></div>
+<small>${shows} · ${expires} · ${used} · created ${time(l.createdAt)}</small>
+</li>`;
   };
 
-  const rows =
-    links.length === 0
-      ? html`<p class="muted">No public links.</p>`
-      : html`<table>
-<thead><tr><th>Label</th><th>Shows</th><th>Created</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
-<tbody>
-${links.map(
-  (l) => html`<tr>
-<td>${l.label || html`<span class="muted">no label</span>`}</td>
-<td>${l.version === null ? 'Latest version' : html`<a href="${base}/v/${l.version}">Version ${l.version}</a>`}</td>
-<td>${time(l.createdAt)}</td>
-<td>${expires(l)}</td>
-<td>${l.lastUsedAt ? time(l.lastUsedAt) : html`<span class="muted">never</span>`}</td>
-<td><form class="inline" method="post" action="${base}/share/${encodeURIComponent(l.id)}/revoke" data-confirm="Revoke this link? Anyone using it loses access."><button class="danger" type="submit">Revoke</button></form></td>
-</tr>`,
-)}
-</tbody>
-</table>`;
-
-  return html`<details class="share"${created ? raw(' open') : ''}>
-<summary>Share${links.length ? ` · ${links.length} public link${links.length === 1 ? '' : 's'}` : ''}</summary>
-${notice}
-<p class="muted">Anyone with a public link can open this artifact without signing in, until you revoke it.</p>
-<form method="post" action="${base}/share" class="bar">
-<select name="version" aria-label="Version to show">
+  return html`${notice}<div class="phead"><span>Public links</span></div>
+<p class="note">Anyone with a public link can open this artifact without signing in, until you revoke it. Comments and live data stay private.</p>
+<form method="post" action="${base}/share" class="share-form">
+<label class="field"><span>Shows</span><select class="input" name="version">
 <option value="latest">Always the latest version</option>
 <option value="${v.version}">Only version ${v.version}</option>
-</select>
-<input type="text" name="label" placeholder="Label, e.g. family" maxlength="100" aria-label="Label">
-<select name="expires" aria-label="Expiry">
+</select></label>
+<label class="field"><span>Expires</span><select class="input" name="expires">
 ${EXPIRY_CHOICES.map(([value, label]) => html`<option value="${value}">${label}</option>`)}
-</select>
-<button type="submit">Create public link</button>
+</select></label>
+<label class="field"><span>Label (optional)</span><input class="input" type="text" name="label" placeholder="e.g. for Sam" maxlength="100"></label>
+<button class="btn primary wide" type="submit">${icon('globe')}Create public link</button>
 </form>
-${rows}
-</details>`;
+${links.length === 0 ? html`<p class="note">No public links.</p>` : html`<ul class="links">${links.map(describe)}</ul>`}`;
 }
 
-/**
- * Threads started on this version or an earlier one, open ones first. Every form is a plain POST to
- * the app origin. Only open text threads carry data-exact: app.js asks the frame to highlight those.
- */
-function commentsPanel(a: Artifact, v: Version, threads: Thread[]): Html {
-  const shown = threads.filter((t) => t.version <= v.version);
-  const open = shown.filter((t) => !t.resolvedAt);
-  const resolved = shown.filter((t) => t.resolvedAt);
-  const action = `/a/${encodeURIComponent(a.id)}/comments`;
-  const version = html`<input type="hidden" name="version" value="${v.version}">`;
-  const textarea = (placeholder: string, rows: number) =>
-    html`<textarea name="body" rows="${rows}" required maxlength="${COMMENT_LIMITS.body}" placeholder="${placeholder}" aria-label="${placeholder}"></textarea>`;
+function detailsPane(
+  a: Artifact,
+  v: Version,
+  versions: Version[],
+  url: (path: string) => string,
+  notice?: string,
+): Html {
+  const id = encodeURIComponent(a.id);
+  const first = versions.at(-1);
+  const caps = (['db', 'viewer'] as const).filter((k) => a.capabilities[k]);
+  return html`${notice ? html`<div class="notice">${notice}</div>` : ''}<dl class="details">
+<dt>Format</dt><dd>${FORMAT_LABELS[v.format]}</dd>
+<dt>Entry</dt><dd class="mono">${v.entry}</dd>
+${
+  v.files.length > 1
+    ? html`<dt>Files</dt><dd><ul class="files">${v.files.map(
+        (f) =>
+          html`<li><a href="${url(f.path)}" target="_blank" rel="noopener noreferrer">${f.path}</a><span class="muted">${size(f.size)}</span></li>`,
+      )}</ul></dd>`
+    : html`<dt>Size</dt><dd>${size(v.files[0]?.size ?? 0)}</dd>`
+}
+<dt>Created</dt><dd>${time(a.createdAt)}${first ? html` by ${first.publishedBy}` : ''}</dd>
+<dt>Updated</dt><dd>${time(a.updatedAt)}</dd>
+<dt>Live data</dt><dd>${caps.length ? html`On: ${caps.join(', ')} · <a href="/docs/runtime">docs</a>` : 'Off'}</dd>
+<dt>ID</dt><dd class="mono">${a.id}</dd>
+</dl>
+<form method="post" action="/a/${id}/settings" class="rename" id="rename">
+<div class="phead"><span>Rename</span></div>
+<label class="field"><span>Title</span><input class="input" type="text" name="title" value="${a.title}" required maxlength="200"></label>
+<label class="field"><span>Description</span><textarea class="input" name="description" rows="3" maxlength="2000">${a.description}</textarea></label>
+<input type="hidden" name="version" value="${v.version}">
+<div class="form-end"><button class="btn sm" type="submit">Save</button></div>
+</form>
+<div class="danger-zone">
+<form method="post" action="/a/${id}/delete" data-confirm="Move this artifact to the trash? It stays there for ${TRASH_DAYS} days."><button class="btn sm danger" type="submit">${icon('trash')}Move to trash</button></form>
+<span class="muted">Kept in the trash for ${TRASH_DAYS} days.</span>
+</div>`;
+}
 
-  const thread = (t: Thread) => {
-    const quote = t.anchor.kind === 'text' ? t.anchor : null;
-    const highlight =
-      quote && !t.resolvedAt
-        ? html` data-exact="${quote.exact}" data-prefix="${quote.prefix}" data-suffix="${quote.suffix}"`
-        : '';
-    return html`<article class="thread${t.resolvedAt ? ' done' : ''}" id="thread-${t.id}"${highlight}>
-${quote ? html`<blockquote class="quote">${quote.exact}</blockquote>` : ''}
-${t.version !== v.version ? html`<span class="badge" title="Started on version ${t.version}">on v${t.version}</span>` : ''}
-<ol>
-${t.comments.map(
-  (
-    c,
-  ) => html`<li><div class="who">${c.author}${c.typed ? '' : html` <span class="badge">agent</span>`} · ${time(c.createdAt)}</div>
-<div class="text">${c.body}</div></li>`,
+// ---- Other pages ----
+
+export function trashPage(opts: { shell: Shell; items: DeletedArtifact[] }): Html {
+  const body =
+    opts.items.length === 0
+      ? html`<div class="empty">${icon('trash', 'big')}<h2>The trash is empty</h2></div>`
+      : html`<div class="list">
+${opts.items.map(
+  (a) => html`<article class="row trash-row">
+${formatIcon(a.format)}
+<div class="row-main"><span class="ttl">${a.title}</span><div class="sub">${FORMAT_LABELS[a.format]} · v${a.latestVersion}</div></div>
+<div class="sub">deleted ${time(a.deletedAt)}</div>
+<form method="post" action="/trash/${encodeURIComponent(a.id)}/restore"><button class="btn sm" type="submit">${icon('restore')}Restore</button></form>
+</article>`,
 )}
-</ol>
-<form method="post" action="${action}">
-<input type="hidden" name="threadId" value="${t.id}">${version}
-${textarea('Reply', 1)}
-<div class="row"><button type="submit">Reply</button>
-<button type="submit" formaction="${action}/${encodeURIComponent(t.id)}/resolve" formnovalidate name="resolved" value="${t.resolvedAt ? '0' : '1'}">${t.resolvedAt ? 'Reopen' : 'Resolve'}</button></div>
-</form>
-</article>`;
-  };
+</div>`;
 
-  return html`<details class="comments" id="comments" open>
-<summary>Comments${open.length ? html` <span class="badge">${open.length} open</span>` : ''}</summary>
-<form method="post" action="${action}" id="new-comment">
-${version}
-<input type="hidden" name="exact"><input type="hidden" name="prefix"><input type="hidden" name="suffix">
-<div id="new-quote" hidden><blockquote class="quote" id="new-quote-text"></blockquote>
-<button type="button" id="new-quote-clear">Remove quote</button></div>
-${textarea(`Comment on version ${v.version}`, 3)}
-<div class="row"><button type="submit">Comment</button></div>
-</form>
-${open.length === 0 ? html`<p class="muted">No open comments.</p>` : open.map(thread)}
-${resolved.length ? html`<details class="resolved"><summary>${plural(resolved.length, 'resolved thread')}</summary>${resolved.map(thread)}</details>` : ''}
-</details>`;
+  return appShell(opts.shell, {
+    title: 'Trash',
+    body: html`<div class="h1row"><h1>Trash</h1><span class="count">${plural(opts.items.length, 'artifact')}</span></div>
+<p class="lead">Deleted artifacts are kept for ${TRASH_DAYS} days, then deleted for good.</p>
+${body}`,
+  });
 }
 
 export function tokensPage(opts: {
-  user: string;
+  shell: Shell;
   tokens: TokenInfo[];
   created?: { token: string; info: TokenInfo };
   error?: string;
@@ -400,38 +634,33 @@ export function tokensPage(opts: {
 
   const rows =
     opts.tokens.length === 0
-      ? html`<p class="muted">No tokens yet.</p>`
-      : html`<table>
-<thead><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr></thead>
-<tbody>
+      ? html`<div class="empty">${icon('key', 'big')}<h2>No tokens yet</h2><p class="muted">Create one for each agent or machine.</p></div>`
+      : html`<div class="list">
 ${opts.tokens.map(
-  (t) => html`<tr>
-<td>${t.name}</td>
-<td>${time(t.createdAt)}</td>
-<td>${t.lastUsedAt ? time(t.lastUsedAt) : html`<span class="muted">never</span>`}</td>
-<td><form class="inline" method="post" action="/settings/tokens/${encodeURIComponent(t.id)}/revoke" data-confirm="Revoke this token? Agents using it lose access."><button class="danger" type="submit">Revoke</button></form></td>
-</tr>`,
+  (t) => html`<article class="row token-row">
+${icon('key')}
+<div class="row-main"><span class="ttl">${t.name}</span><div class="sub">created ${time(t.createdAt)}</div></div>
+<div class="sub">${t.lastUsedAt ? html`used ${time(t.lastUsedAt)}` : 'never used'}</div>
+<form method="post" action="/settings/tokens/${encodeURIComponent(t.id)}/revoke" data-confirm="Revoke this token? Agents using it lose access."><button class="btn sm danger" type="submit">Revoke</button></form>
+</article>`,
 )}
-</tbody>
-</table>`;
+</div>`;
 
-  return layout({
+  return appShell(opts.shell, {
     title: 'Tokens',
-    user: opts.user,
-    nav: 'tokens',
-    body: html`<h1>Tokens</h1>
-<p class="muted">Agents use a token to publish over MCP. Create one per agent or machine.</p>
+    body: html`<div class="h1row"><h1>Tokens</h1></div>
+<p class="lead">Agents use a token to publish over MCP. Create one per agent or machine.</p>
 ${created}
 ${opts.error ? html`<div class="notice error">${opts.error}</div>` : ''}
-<form method="post" action="/settings/tokens" class="bar">
-<input type="text" name="name" placeholder="Name, e.g. laptop-claude-code" required maxlength="100" aria-label="Token name">
-<button type="submit">Create token</button>
+<form method="post" action="/settings/tokens" class="inline-form">
+<input class="input" type="text" name="name" placeholder="Name, e.g. laptop-claude-code" required maxlength="100" aria-label="Token name">
+<button class="btn primary" type="submit">${icon('plus')}Create token</button>
 </form>
 ${rows}`,
   });
 }
 
-export function connectPage(opts: { user: string; appOrigin: string }): Html {
+export function connectPage(opts: { shell: Shell; appOrigin: string }): Html {
   const mcpUrl = `${opts.appOrigin}/mcp`;
   const claude = `claude mcp add --transport http -s user agent-artifacts ${mcpUrl} --header "Authorization: Bearer <TOKEN>"`;
   const opencode = JSON.stringify(
@@ -460,15 +689,12 @@ export function connectPage(opts: { user: string; appOrigin: string }): Html {
     null,
     2,
   );
-  const snippet = (id: string, text: string) =>
-    html`<div class="snippet"><pre><code id="${id}">${text}</code></pre>${copyButton(id)}</div>`;
 
-  return layout({
+  return appShell(opts.shell, {
     title: 'Connect',
-    user: opts.user,
-    nav: 'connect',
-    body: html`<h1>Connect an agent</h1>
-<p>Agents publish over MCP (streamable HTTP) with a bearer token. <a href="/settings/tokens">Create a token</a> first and use it in place of <code>&lt;TOKEN&gt;</code>.</p>
+    body: html`<div class="prose">
+<div class="h1row"><h1>Connect an agent</h1></div>
+<p class="lead">Agents publish over MCP (streamable HTTP) with a bearer token. <a href="/settings/tokens">Create a token</a> first and use it in place of <code>&lt;TOKEN&gt;</code>.</p>
 <h2>MCP URL</h2>
 ${snippet('mcp-url', mcpUrl)}
 <h2>Claude Code</h2>
@@ -479,6 +705,7 @@ ${snippet('opencode', opencode)}
 <h2>Other MCP clients</h2>
 ${snippet('generic', generic)}
 <h2>Live pages</h2>
-<p>HTML artifacts can keep data, such as poll votes or a checklist: see <a href="/docs/runtime">the runtime</a>.</p>`,
+<p>HTML artifacts can keep data, such as poll votes or a checklist: see <a href="/docs/runtime">the runtime</a>.</p>
+</div>`,
   });
 }
