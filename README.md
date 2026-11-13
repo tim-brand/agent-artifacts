@@ -62,7 +62,7 @@ To run it for real, the app goes behind a reverse proxy that serves it over HTTP
 node src/hash-password.ts you@example.com
 ```
 
-It asks for a password and prints `you@example.com:scrypt.…`. Paste that after `AUTH_USERS=`. In the Docker image: `docker run --rm -it ghcr.io/tim-brand/agent-artifacts:0.3.0 node src/hash-password.ts you@example.com`. The proxy only has to serve HTTPS, pass `Host` through and set `X-Forwarded-For`. See [Built-in sign-in](docs/deployment.md#built-in-sign-in).
+It asks for a password and prints `you@example.com:scrypt.…`. Paste that after `AUTH_USERS=`. In the Docker image: `docker run --rm -it ghcr.io/tim-brand/agent-artifacts:0.3.1 node src/hash-password.ts you@example.com`. The proxy only has to serve HTTPS, pass `Host` through and set `X-Forwarded-For`. See [Built-in sign-in](docs/deployment.md#built-in-sign-in).
 
 **Sign-in proxy** (`AUTH_MODE=proxy`, the default), for an identity provider. The app trusts the identity that the proxy sends in a request header. You name that header in `AUTH_EMAIL_HEADER`: every proxy has its own (see [Header names that sign-in proxies send](docs/deployment.md#header-names-that-sign-in-proxies-send)), so there is no default, and the app refuses to start without it. The rules that keep this safe:
 
