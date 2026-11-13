@@ -103,7 +103,7 @@ The path rules match without regard to case and decode `%` escapes, so `/MCP` an
 - **Backups.** All data is in the `app-data` volume (`/data` in the container: the SQLite database and the artifact files). Stop the app before you copy it, or the copy may be inconsistent: `docker compose stop app`, copy, `docker compose start app`. Keep your `.env` too, for the password hash and `SIGNING_SECRET`. A new `SIGNING_SECRET` is not a disaster: it only signs the one-hour links to artifact content that the web UI makes on each page load, so an open page needs a reload. Public share links and tokens keep working.
 - **One replica only.** SQLite allows one writer. Do not scale `app` above 1.
 - **More users.** The `Caddyfile` has one user. Caddy's `basic_auth` block takes more lines of `name hash`. Add them to the `Caddyfile` yourself; every user can see and change everything.
-- **Prebuilt image.** `compose.yaml` has a commented `image: ghcr.io/tim-brand/agent-artifacts:latest` line to use instead of `build:`. Use it only if that image is published. This example was only tested with `build:`.
+- **Prebuilt image.** `compose.yaml` has a commented `image: ghcr.io/tim-brand/agent-artifacts:0.1.0` line to use instead of `build:`. It is built for `linux/amd64` only. This example was only tested with `build:`.
 
 ## What was tested
 

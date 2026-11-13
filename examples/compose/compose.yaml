@@ -7,8 +7,8 @@ services:
   app:
     # Build the image from this repository (the folder two levels up).
     build: ../..
-    # Or use a published image instead. Only if that image exists; check before you rely on it:
-    # image: ghcr.io/tim-brand/agent-artifacts:latest
+    # Or use a released image instead (linux/amd64); see the releases on GitHub for the versions:
+    # image: ghcr.io/tim-brand/agent-artifacts:0.1.0
     restart: unless-stopped
     environment:
       APP_ORIGIN: ${APP_ORIGIN:?set APP_ORIGIN in .env}
