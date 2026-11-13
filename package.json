@@ -1,6 +1,6 @@
 {
   "name": "agent-artifacts",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A self-hosted place where AI agents publish artifacts over MCP, and people view, comment on and share them in a web UI.",
   "private": true,
   "license": "MIT",

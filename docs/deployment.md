@@ -23,8 +23,10 @@ docker build -t agent-artifacts .
 Or pull the image that the project's CI publishes (`linux/amd64` only):
 
 ```bash
-docker pull ghcr.io/tim-brand/agent-artifacts:latest
+docker pull ghcr.io/tim-brand/agent-artifacts:0.1.0
 ```
+
+Each [release](https://github.com/tim-brand/agent-artifacts/releases) has a tag like `0.1.0` that never changes. `latest` is the newest commit on `master`, released or not; use it only if you want to follow the development.
 
 The image runs as the user `node`, sets `NODE_ENV=production`, listens on port 3000, and writes only to `/data`. Mount a persistent volume there. A directory you mount from the host must be writable by the `node` user (uid 1000). A minimal run command looks like this; the proxy still has to be set up as described below:
 

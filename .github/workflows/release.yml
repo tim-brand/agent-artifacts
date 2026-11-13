@@ -1,0 +1,59 @@
+name: Release
+
+# Pushing a tag such as v0.1.0 gives the image of that commit the tag 0.1.0 and creates the GitHub
+# release. Nothing is built here: image.yml built and pushed the image when the commit was the tip
+# of master, under the tag of its short sha. A commit without such an image cannot be released.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The same short sha as image.yml makes, and the version must be the one in package.json.
+      - id: vars
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          declared="$(jq -r .version package.json)"
+          if [ "$declared" != "$version" ]; then
+            echo "::error::The tag is $TAG, but package.json says version $declared"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag the image of this commit with the version
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}
+          SHA: ${{ steps.vars.outputs.sha }}
+          VERSION: ${{ steps.vars.outputs.version }}
+        run: docker buildx imagetools create -t "$IMAGE:$VERSION" "$IMAGE:$SHA"
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --verify-tag --generate-notes
