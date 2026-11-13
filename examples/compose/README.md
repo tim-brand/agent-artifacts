@@ -1,15 +1,13 @@
-# Docker Compose example: Caddy with basic auth
+# Docker Compose example: built-in sign-in behind Caddy
 
-This runs Agent Artifacts on one machine with Docker Compose. Caddy sits in front of the app and asks for a user name and password (HTTP basic auth). The app is not published on any port of its own.
+This runs Agent Artifacts on one machine with Docker Compose. People sign in on a page of the app with an email and a password (the [built-in sign-in](../../docs/deployment.md#built-in-sign-in)). Caddy sits in front and serves HTTPS. The app is not published on any port of its own.
 
-It is for one person, or a few people who each get a password. It needs no identity provider.
-
-If you want single sign-on, put the app behind an identity provider with forward auth instead. See [../../docs/deployment.md](../../docs/deployment.md).
+It is for one person, or a few people who each get a password. It needs no identity provider. If you want single sign-on, put the app behind an identity provider instead. See [../../docs/deployment.md](../../docs/deployment.md).
 
 ## What you get
 
 - `app`: Agent Artifacts, built from this repository. Data lives in the `app-data` volume.
-- `caddy`: the only service with a published port. It handles sign-in, passes requests to the app, and (with real domains) gets HTTPS certificates.
+- `caddy`: the only service with a published port. It answers on both hostnames, gets HTTPS certificates for real domains, and passes every request to the app. It does no sign-in.
 
 The app serves two hosts: the app host (the web UI and `/mcp`) and a separate content host that serves artifact files. They need two different names. The local trial uses `localhost` and `content.localhost`. Browsers resolve `*.localhost` to your own computer, so no DNS setup is needed.
 
@@ -17,38 +15,51 @@ The app serves two hosts: the app host (the web UI and `/mcp`) and a separate co
 
 You need Docker with Compose v2, and `openssl`. Run everything in this folder. With Docker Desktop, the folder must be one that Docker may share (Settings, Resources, File sharing), or mounting the `Caddyfile` fails with "mounts denied".
 
-```sh
-cd examples/compose
-cp .env.example .env
-```
+1. Copy the settings file:
 
-Make a signing secret and a password hash:
-
-```sh
-openssl rand -base64 32
-docker run --rm caddy:2 caddy hash-password --plaintext 'your password'
-```
-
-Edit `.env`:
-
-1. Paste the secret after `SIGNING_SECRET=`.
-2. Set `AUTH_USER`. An email address works best, because the app shows this name as the signed-in user.
-3. Paste the hash after `AUTH_HASH=`, **inside single quotes**, exactly as printed:
-
-   ```
-   AUTH_HASH='$2a$14$...'
+   ```sh
+   cd examples/compose
+   cp .env.example .env
    ```
 
-   A bcrypt hash contains `$` characters. Compose treats `$` as the start of a variable, but not inside single quotes in a `.env` file. Without the quotes the hash is broken and you cannot sign in. Nothing else needs escaping: the `compose.yaml` passes the value on as it is.
+2. Make a signing secret, and paste it after `SIGNING_SECRET=` in `.env`:
 
-Start it:
+   ```sh
+   openssl rand -base64 32
+   ```
+
+3. Make your account. The command builds the image the first time, asks for a password twice (it shows nothing as you type), and prints one line: your email and the password hash.
+
+   ```sh
+   docker compose run --rm --no-deps app node src/hash-password.ts you@example.com
+   ```
+
+   ```text
+   Password:
+   Password again:
+   you@example.com:scrypt.15.8.3.…
+   ```
+
+   Paste that last line after `AUTH_USERS=` in `.env`. It has no `$` and no spaces, so it needs no quotes. The command needs the secret from step 2, because Compose checks `.env` first.
+
+4. Start it:
+
+   ```sh
+   docker compose up -d --build
+   docker compose ps
+   ```
+
+   Both containers should be running, and `app` should say `healthy`.
+
+5. Open <http://localhost:8080> and sign in with your email and password.
+
+If the app does not start, `docker compose up -d` ends with `dependency failed to start: container agent-artifacts-app-1 is unhealthy`. The reason is in the log of the app:
 
 ```sh
-docker compose up -d --build
-docker compose ps
+docker compose logs app
 ```
 
-Both containers should be running, and `app` should say `healthy`. Open <http://localhost:8080>. Your browser asks for the user name and password.
+The last lines name the setting that is wrong, for example `AUTH_MODE is password, but AUTH_USERS holds no account`. Fix `.env` and run `docker compose up -d` again.
 
 To stop it, run `docker compose down`. Add `-v` to also delete the data volumes, and `--rmi local` to also delete the image that was built.
 
@@ -62,11 +73,9 @@ For example, with Claude Code:
 claude mcp add --transport http -s user agent-artifacts http://localhost:8080/mcp
 ```
 
-Then run `/mcp` in Claude Code, pick `agent-artifacts` and choose Authenticate. The client opens your browser on the app's consent page. Your browser asks for the basic-auth password there, then you click Allow.
+Then run `/mcp` in Claude Code, pick `agent-artifacts` and choose Authenticate. The client opens your browser on the app's consent page. Sign in there if you are not signed in, then click Allow.
 
 For a client without OAuth, create a personal access token under Settings, Connections, and send it as `Authorization: Bearer <token>`. The `/connect` page shows the config for that too.
-
-`/mcp` does not use basic auth. MCP clients cannot answer a browser login, so `/mcp` checks the bearer token itself.
 
 ## Real domains with HTTPS
 
@@ -78,50 +87,48 @@ For a client without OAuth, create a personal access token under Settings, Conne
    CONTENT_ORIGIN=https://artifacts-content.example.com
    ```
 
+   `APP_ORIGIN` must be `https`. With the built-in sign-in the app refuses to start otherwise. Plain `http` is only accepted for `localhost`, `*.localhost`, `127.0.0.1` and `[::1]`.
 3. In `compose.yaml`, under `caddy`, replace the `"8080:8080"` line with ports 80 and 443 (the commented lines are there).
 4. Open ports 80 and 443 to the internet. Caddy asks for certificates from Let's Encrypt on its own. It needs port 80 or 443 reachable for that, and it keeps the certificates in the `caddy-data` volume.
 5. `docker compose up -d`.
 
-Use a strong password. The sign-in is open to the internet, and basic auth has no lockout.
+Use a long password. The sign-in is open to the internet. The app limits attempts (10 a minute from one address, 5 a minute for one account), but there is no other lockout and no second factor.
 
-## What the proxy guarantees
+## People and passwords
 
-The app has no sign-in of its own. It trusts the `X-Auth-Email` header as the user. The `Caddyfile` makes sure that header only ever comes from Caddy:
+The app reads `AUTH_USERS` at startup. To add a person, remove one or change a password, edit `AUTH_USERS` in `.env` and run:
 
-- Every path on the app site needs basic auth, except `/mcp`, `/healthz` and the six OAuth paths that MCP clients must reach (`PUBLIC_OAUTH_PATHS` in `src/oauth/rules.ts`). Those check bearer tokens themselves.
-- After a successful login, Caddy sets `X-Auth-Email` to the user name. It replaces any value the client sent.
-- On the open paths and on the content site, Caddy deletes `X-Auth-Email` and `X-Auth-Name`.
-- The consent page `/oauth/authorize` needs a login.
-- The content site has no sign-in. Its files are served from signed URLs.
-- Caddy passes the `Host` header on unchanged, which the app needs to tell the two sites apart. It also replaces a client-sent `X-Forwarded-For` with the real client address, which the app uses for rate limits.
-- The app has no published port, so nothing can reach it without going through Caddy.
+```sh
+docker compose up -d
+```
 
-The path rules match without regard to case and decode `%` escapes, so `/MCP` and `/%6dcp` also count as open. That is harmless: the identity headers are deleted on the open paths, so the app sees an anonymous request. The `Caddyfile` explains this in comments. If you change the paths, keep this rule: the only request that gets an identity header is one that passed basic auth.
+Compose sees the new value and restarts the app. A person who is removed, or has a new password, is signed out.
+
+- Make an entry for each person with the command from step 3. Separate entries with commas, on one line: `AUTH_USERS=you@example.com:scrypt.…,friend@example.com:scrypt.…`.
+- To change a password, make a new entry for the same email and replace the old one.
+- For a script, pipe the password in and drop the terminal: `printf '%s\n' "$PASSWORD" | docker compose run --rm --no-deps -T app node src/hash-password.ts you@example.com`. Add `2>/dev/null` to keep only the entry. With a terminal you cannot split the prompts from the entry, so copy the last line.
+
+Everyone who can sign in sees and can change everything.
 
 ## Things to know
 
-- **Backups.** All data is in the `app-data` volume (`/data` in the container: the SQLite database and the artifact files). Stop the app before you copy it, or the copy may be inconsistent: `docker compose stop app`, copy, `docker compose start app`. Keep your `.env` too, for the password hash and `SIGNING_SECRET`. A new `SIGNING_SECRET` is not a disaster: it only signs the one-hour links to artifact content that the web UI makes on each page load, so an open page needs a reload. Public share links and tokens keep working.
+- **Backups.** All data is in the `app-data` volume (`/data` in the container: the SQLite database and the artifact files). Stop the app before you copy it, or the copy may be inconsistent:
+
+  ```sh
+  docker compose stop app
+  docker run --rm -v agent-artifacts_app-data:/data:ro -v "$PWD":/backup alpine tar czf /backup/app-data.tgz -C /data .
+  docker compose start app
+  ```
+
+  Keep your `.env` too, for `AUTH_USERS` and `SIGNING_SECRET`. A new `SIGNING_SECRET` is not a disaster: it only signs the one-hour links to artifact content that the web UI makes on each page load, so an open page needs a reload. Public share links and tokens keep working.
+- **Upgrade.** Back up, then pull the new code and run `docker compose up -d --build`. The database is updated at startup.
 - **One replica only.** SQLite allows one writer. Do not scale `app` above 1.
-- **More users.** The `Caddyfile` has one user. Caddy's `basic_auth` block takes more lines of `name hash`. Add them to the `Caddyfile` yourself; every user can see and change everything.
-- **Prebuilt image.** `compose.yaml` has a commented `image: ghcr.io/tim-brand/agent-artifacts:0.1.0` line to use instead of `build:`. It is built for `linux/amd64` only. This example was only tested with `build:`.
+- **Prebuilt image.** `compose.yaml` has a commented `image: ghcr.io/tim-brand/agent-artifacts:latest` line to use instead of `build:`. It is built for `linux/amd64` only. The built-in sign-in is newer than release 0.1.0, so use `latest` or a later release. This example was only tested with `build:`.
+- **The client address.** Caddy replaces a client-sent `X-Forwarded-For` with the real address, and the app uses it for the sign-in limit. Do not add `trusted_proxies` to the `Caddyfile` unless another proxy sits in front of Caddy.
 
-## What was tested
+## What this example does not do
 
-Tested with real containers (Docker Desktop on macOS, Caddy 2, local trial on `http://localhost:8080`):
-
-- `docker compose up -d --build` from a `.env` made from `.env.example`; both containers up and the app healthy; port 3000 not reachable from the host.
-- Basic auth: 401 with a challenge without credentials or with a wrong password; the page shows the user name with the right one.
-- Spoofing: a client-sent `X-Auth-Email` or `X-Auth-Name` gives no access without a login, and is replaced by the real user with one. Also checked on the open paths and on the content site, with odd paths (`/MCP`, `/mcp/`, `/mcp/../`, `/%6dcp`, `//settings/connections`, dot segments after open paths, encoded slashes).
-- `/healthz`, the two `/.well-known/` documents (their URLs start with `http://localhost:8080`), and the 401 from `/oauth/authorize`.
-- A personal access token made in the UI, used on `/mcp` without basic auth: `tools/list`, and `publish_artifact`. The 401 without a token points at the metadata URL.
-- The artifact page and its content URL: the content fetch needs no login and has a `Content-Security-Policy` with `sandbox`.
-- `X-Forwarded-For`: Caddy replaces a client-sent value.
-- Data survives `docker compose restart`.
-
-Not tested:
-
-- Real domains, DNS and HTTPS certificates.
-- Ports 80 and 443.
-- The full OAuth sign-in of a real MCP client (only that its public endpoints are reachable and the consent page asks for a login).
-- Running on Linux or on Windows.
-- More than one user, and the prebuilt image.
+- No password reset by email, no sign-up, no second factor, no roles.
+- No separate users: everyone who signs in has the same access.
+- No backups on a schedule, and no more than one app replica.
+- No sign-in through an identity provider. For that, see [../../docs/deployment.md](../../docs/deployment.md).

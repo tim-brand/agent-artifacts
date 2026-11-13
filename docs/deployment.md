@@ -31,7 +31,7 @@ Or pull the image that the project's CI publishes (`linux/amd64` only):
 docker pull ghcr.io/tim-brand/agent-artifacts:0.1.0
 ```
 
-Each [release](https://github.com/tim-brand/agent-artifacts/releases) has a tag like `0.1.0` that never changes. `latest` is the newest commit on `master`, released or not; use it only if you want to follow the development.
+Each [release](https://github.com/tim-brand/agent-artifacts/releases) has a tag like `0.1.0` that never changes. The built-in sign-in is newer than release 0.1.0: use `latest` or a later release for it. `latest` is the newest commit on `master`, released or not; use it only if you want to follow the development.
 
 The image runs as the user `node`, sets `NODE_ENV=production`, listens on port 3000, and writes only to `/data`. Mount a persistent volume there. A directory you mount from the host must be writable by the `node` user (uid 1000). A minimal run command looks like this; the proxy still has to be set up as described below, and you still need `AUTH_MODE`, with `AUTH_USERS` for the built-in sign-in:
 
@@ -47,7 +47,7 @@ docker run -d --name agent-artifacts \
 
 Generate the `SIGNING_SECRET` once and keep it: the command above makes a new one each time you run it, which would break content links after a restart. Store it in a file or a secret manager.
 
-For a complete, tested setup with Docker Compose, Caddy and HTTP basic auth, use [`examples/compose/`](../examples/compose/). It is meant for one person or a few people who have no identity provider, and it serves `http://localhost:8080` for a local trial.
+For a complete, tested setup with Docker Compose, Caddy and the built-in sign-in, use [`examples/compose/`](../examples/compose/). It is meant for one person or a few people who have no identity provider, and it serves `http://localhost:8080` for a local trial.
 
 You do not need Docker: the app is plain Node 24 and runs with `pnpm install --prod` and `pnpm start`. Set `NODE_ENV=production` in that case.
 
@@ -94,6 +94,8 @@ In a clone of the repository, `pnpm hash-password you@example.com` does the same
 ```bash
 docker run --rm -it ghcr.io/tim-brand/agent-artifacts:latest node src/hash-password.ts you@example.com
 ```
+
+The built-in sign-in is newer than release 0.1.0, so use `latest` or a later release.
 
 Notes:
 
@@ -201,14 +203,14 @@ Put the header your proxy sends into `AUTH_EMAIL_HEADER`, and the one with the d
 | Authelia | `Remote-Email` | `Remote-Name` | [Trusted Header SSO](https://www.authelia.com/integration/trusted-header-sso/introduction/) |
 | Tailscale Serve | `Tailscale-User-Login` (the login name, usually an email) | `Tailscale-User-Name` | [Tailscale Serve](https://tailscale.com/kb/1312/serve) |
 | Cloudflare Access | `Cf-Access-Authenticated-User-Email` | none | [Cloudflare tutorial](https://developers.cloudflare.com/cloudflare-one/tutorials/extend-sso-with-workers/) |
-| Caddy basic auth, as in the Compose example | `X-Auth-Email` | none | set by the Caddyfile in [`examples/compose/`](../examples/compose/) |
+| Caddy `basic_auth` | any name you choose, for example `X-Auth-Email`: set it with `header_up X-Auth-Email {http.auth.user.id}` | none (add `header_up -X-Auth-Name` so a client cannot set it) | [`basic_auth` directive](https://caddyserver.com/docs/caddyfile/directives/basic_auth) |
 
 Notes:
 
 - With oauth2-proxy in `auth_request` mode (for example with nginx), the identity comes back in response headers such as `X-Auth-Request-Email` (`--set-xauthrequest`), which your proxy must copy to the request it sends to the app.
 - Tailscale Serve removes these headers from incoming requests itself, and does not set them for Funnel (public) traffic. Tailscale advises that the backend listen on localhost only.
 - Cloudflare says to validate the signed `Cf-Access-Jwt-Assertion` token and not to trust the email header alone. The app does not validate that token, so rules 1 and 4 matter even more: only Cloudflare may reach the app (for example through a tunnel), and nothing else may set the header.
-- This page gives no full configuration for these products. The tested, complete configuration is the Compose example. For the others, the numbered rules above are what counts.
+- This page gives no full configuration for these products. The numbered rules above are what counts. The [Compose example](../examples/compose/) uses the built-in sign-in instead, so it is not a configuration for proxy mode.
 
 ### What goes wrong when
 

@@ -62,7 +62,7 @@ To run it for real, the app goes behind a reverse proxy that serves it over HTTP
 node src/hash-password.ts you@example.com
 ```
 
-It asks for a password and prints `you@example.com:scrypt.…`. Paste that after `AUTH_USERS=`. In the Docker image: `docker run --rm -it ghcr.io/tim-brand/agent-artifacts:latest node src/hash-password.ts you@example.com`. The proxy only has to serve HTTPS, pass `Host` through and set `X-Forwarded-For`. See [Built-in sign-in](docs/deployment.md#built-in-sign-in).
+It asks for a password and prints `you@example.com:scrypt.…`. Paste that after `AUTH_USERS=`. In the Docker image: `docker run --rm -it ghcr.io/tim-brand/agent-artifacts:latest node src/hash-password.ts you@example.com` (the built-in sign-in is newer than release 0.1.0, so use `latest` or a later release). The proxy only has to serve HTTPS, pass `Host` through and set `X-Forwarded-For`. See [Built-in sign-in](docs/deployment.md#built-in-sign-in).
 
 **Sign-in proxy** (`AUTH_MODE=proxy`, the default), for an identity provider. The app trusts the identity that the proxy sends in a request header (by default `X-authentik-email`; Authentik is just one example, and any proxy works). The rules that keep this safe:
 
@@ -73,7 +73,7 @@ It asks for a password and prints `you@example.com:scrypt.…`. Paste that after
 
 In both ways: set a real `SIGNING_SECRET` (`openssl rand -base64 32`), use HTTPS, run one replica, and back up the data directory.
 
-For the quickest real setup, use [`examples/compose/`](examples/compose/): Docker Compose with Caddy and HTTP basic auth, for one person or a few people without an identity provider. It serves `http://localhost:8080` for a local trial. The full, checkable list of proxy rules, the header names of common sign-in products, backups, upgrades and the image are in [Deploying Agent Artifacts](docs/deployment.md). The image is `ghcr.io/tim-brand/agent-artifacts:latest` (`linux/amd64`), or build it with `docker build .`.
+For the quickest real setup, use [`examples/compose/`](examples/compose/): Docker Compose with Caddy and the built-in sign-in, for one person or a few people without an identity provider. It serves `http://localhost:8080` for a local trial. The full, checkable list of proxy rules, the header names of common sign-in products, backups, upgrades and the image are in [Deploying Agent Artifacts](docs/deployment.md). The image is `ghcr.io/tim-brand/agent-artifacts:latest` (`linux/amd64`), or build it with `docker build .`.
 
 ## Settings
 
