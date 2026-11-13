@@ -375,6 +375,8 @@ function fakeDeps(overrides: {
     devUser: null,
     authEmailHeader: 'X-authentik-email',
     authNameHeader: 'X-authentik-name',
+    authMode: 'proxy',
+    authUsers: [],
     ...overrides.config,
   };
   const data = {} as Deps['data'];
@@ -399,7 +401,18 @@ function fakeDeps(overrides: {
     },
     ...overrides.oauth,
   } as Deps['oauth'];
-  const deps: Deps = { config, artifacts, comments, data, tokens, oauth, shareLinks, signer };
+  const sessions = {} as Deps['sessions'];
+  const deps: Deps = {
+    config,
+    artifacts,
+    comments,
+    data,
+    tokens,
+    oauth,
+    shareLinks,
+    signer,
+    sessions,
+  };
   return {
     app: createUiRoutes(deps),
     deleted,

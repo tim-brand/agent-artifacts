@@ -24,7 +24,9 @@ An **artifact** is one thing an agent made: an HTML page, a Markdown document, a
 
 It is a small tool for one person or a small trusted group. It runs as **one process with one SQLite file, and must run as one replica**.
 
-It has **no accounts and no sign-in of its own**: a reverse proxy in front of it signs people in. It also has **no separation between users**. Everyone the proxy lets in sees every artifact, comment, token and public link, and can delete, answer and share. The signed-in email is only recorded as the author of a comment or the person who answered an ask. Agents are not separated either. Only let in people who may see everything. See [Who can see what](docs/deployment.md#who-can-see-what).
+People sign in in one of two ways. The **built-in sign-in** has a few accounts, each an email and a password, that you list in a setting. Or a **sign-in proxy** in front of the app signs people in and tells the app who they are; that is the way to use an identity provider. There is no sign-up, no password reset and no roles.
+
+It also has **no separation between users**. Everyone who can sign in sees every artifact, comment, token and public link, and can delete, answer and share. The signed-in email is only recorded as the author of a comment or the person who answered an ask. Agents are not separated either. Only let in people who may see everything. See [Who can see what](docs/deployment.md#who-can-see-what).
 
 ## Quick start
 
@@ -52,14 +54,24 @@ Then try a comment: select some text on the page, click "Comment on selection", 
 
 ## Deploying
 
-To run it for real, the app goes behind a reverse proxy that signs people in. The app trusts the identity that the proxy sends in a request header (by default `X-authentik-email`; Authentik is just one example, and any proxy works). The rules that keep this safe:
+To run it for real, the app goes behind a reverse proxy that serves it over HTTPS. There are two ways to sign people in. Pick one with `AUTH_MODE`.
+
+**Built-in sign-in** (`AUTH_MODE=password`), for one person or a few. You make an account with a command and put it in `AUTH_USERS`:
+
+```bash
+node src/hash-password.ts you@example.com
+```
+
+It asks for a password and prints `you@example.com:scrypt.…`. Paste that after `AUTH_USERS=`. In the Docker image: `docker run --rm -it ghcr.io/tim-brand/agent-artifacts:latest node src/hash-password.ts you@example.com`. The proxy only has to serve HTTPS, pass `Host` through and set `X-Forwarded-For`. See [Built-in sign-in](docs/deployment.md#built-in-sign-in).
+
+**Sign-in proxy** (`AUTH_MODE=proxy`, the default), for an identity provider. The app trusts the identity that the proxy sends in a request header (by default `X-authentik-email`; Authentik is just one example, and any proxy works). The rules that keep this safe:
 
 - Never expose the app's port directly. Only the proxy may reach it.
 - The proxy sets the identity header from the signed-in user, and removes any such header that a client sent, on every path and on the content host.
 - `/mcp`, `/healthz` and six public OAuth paths ([listed here](docs/deployment.md#what-the-reverse-proxy-must-do)) must be reachable without the proxy's sign-in, because agents use tokens there. Everything else on the app host, including `/oauth/authorize`, needs sign-in.
 - The content host is a separate hostname with no sign-in and no cookies. The proxy must pass `Host` through unchanged.
-- Set a real `SIGNING_SECRET` (`openssl rand -base64 32`), and use HTTPS.
-- Run one replica, and back up the data directory.
+
+In both ways: set a real `SIGNING_SECRET` (`openssl rand -base64 32`), use HTTPS, run one replica, and back up the data directory.
 
 For the quickest real setup, use [`examples/compose/`](examples/compose/): Docker Compose with Caddy and HTTP basic auth, for one person or a few people without an identity provider. It serves `http://localhost:8080` for a local trial. The full, checkable list of proxy rules, the header names of common sign-in products, backups, upgrades and the image are in [Deploying Agent Artifacts](docs/deployment.md). The image is `ghcr.io/tim-brand/agent-artifacts:latest` (`linux/amd64`), or build it with `docker build .`.
 
@@ -67,19 +79,21 @@ For the quickest real setup, use [`examples/compose/`](examples/compose/): Docke
 
 The app reads these environment variables. `pnpm dev` also reads `.env`.
 
-| Variable            | Required | What it does                                                                                                                                                                     |
-| ------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `APP_ORIGIN`        | yes      | Public origin of the app host, for example `https://artifacts.example.com`.                                                                                                      |
-| `CONTENT_ORIGIN`    | yes      | Public origin of the content host. It must be a different host from `APP_ORIGIN`.                                                                                                |
-| `SIGNING_SECRET`    | yes      | At least 32 characters. Signs the links to artifact content. Make one with `openssl rand -base64 32`. A value that starts with `change-me` is refused outside local development. |
-| `PORT`              | no       | Port to listen on. Default `3000`.                                                                                                                                               |
-| `DATA_DIR`          | no       | The SQLite database and the artifact files. Default `./data`, and `/data` in the image.                                                                                          |
-| `AUTH_EMAIL_HEADER` | no       | The request header where your sign-in proxy sends the user's email. Default `X-authentik-email`. Letters, digits and `-` only.                                                   |
-| `AUTH_NAME_HEADER`  | no       | The header for the user's display name. Default `X-authentik-name`.                                                                                                              |
-| `DEV_USER`          | no       | Local development only: the signed-in user when no identity header is sent. The app refuses to start with it outside local development.                                          |
-| `NODE_ENV`          | no       | `production` turns local development off. The Docker image sets it.                                                                                                              |
+| Variable            | Required           | What it does                                                                                                                                                                                                |
+| ------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APP_ORIGIN`        | yes                | Public origin of the app host, for example `https://artifacts.example.com`.                                                                                                                                 |
+| `CONTENT_ORIGIN`    | yes                | Public origin of the content host. It must be a different host from `APP_ORIGIN`.                                                                                                                           |
+| `SIGNING_SECRET`    | yes                | At least 32 characters. Signs the links to artifact content. Make one with `openssl rand -base64 32`. A value that starts with `change-me` is refused outside local development.                            |
+| `PORT`              | no                 | Port to listen on. Default `3000`.                                                                                                                                                                          |
+| `DATA_DIR`          | no                 | The SQLite database and the artifact files. Default `./data`, and `/data` in the image.                                                                                                                     |
+| `AUTH_MODE`         | no                 | `proxy` (the default): a sign-in proxy tells the app who is signed in. `password`: the built-in sign-in. Any other value is refused.                                                                        |
+| `AUTH_USERS`        | in `password` mode | The accounts of the built-in sign-in: `email:hash` entries, separated by commas or white space. Make an entry with `node src/hash-password.ts you@example.com`. Refused when `AUTH_MODE` is not `password`. |
+| `AUTH_EMAIL_HEADER` | no                 | Proxy mode: the request header where your sign-in proxy sends the user's email. Default `X-authentik-email`. Letters, digits and `-` only. Not used in `password` mode.                                     |
+| `AUTH_NAME_HEADER`  | no                 | Proxy mode: the header for the user's display name. Default `X-authentik-name`. Not used in `password` mode.                                                                                                |
+| `DEV_USER`          | no                 | Local development only, proxy mode only: the signed-in user when no identity header is sent. The app refuses to start with it outside local development, and with `AUTH_MODE=password`.                     |
+| `NODE_ENV`          | no                 | `production` turns local development off. The Docker image sets it.                                                                                                                                         |
 
-Local development means `NODE_ENV` is not `production` and the host name of `APP_ORIGIN` is `localhost`, a name that ends in `.localhost`, `127.0.0.1` or `[::1]`. If a setting is wrong, the app prints one line, `agent-artifacts: <message>`, and exits; [Deployment](docs/deployment.md#what-goes-wrong-when) lists the messages.
+Local development means `NODE_ENV` is not `production` and the host name of `APP_ORIGIN` is `localhost`, a name that ends in `.localhost`, `127.0.0.1` or `[::1]`. With `AUTH_MODE=password`, `APP_ORIGIN` must be `https`, except on the local names above (and this does not depend on `NODE_ENV`). If a setting is wrong, the app prints one line, `agent-artifacts: <message>`, and exits; [Deployment](docs/deployment.md#what-goes-wrong-when) lists the messages.
 
 ## Documentation
 

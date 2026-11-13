@@ -80,4 +80,4 @@ Agents read and seed the same data over MCP: `artifact_data_get`, `artifact_data
 
 ## How it stays safe
 
-The frame never sees a cookie or a token. The page's calls go to the artifact page of the app, which makes them with `fetch` on the app host, behind the proxy's sign-in and the Origin check on writes. The artifact id comes from the page, never from a message. Messages between the app and the frame travel over a private channel that only that one document holds. The details are in [Architecture](architecture.md#live-pages-and-the-message-channel).
+The frame never sees a cookie or a token. The page's calls go to the artifact page of the app, which makes them with `fetch` on the app host, behind the sign-in (the proxy's, or the built-in one) and the Origin check on writes. The artifact id comes from the page, never from a message. Messages between the app and the frame travel over a private channel that only that one document holds. The details are in [Architecture](architecture.md#live-pages-and-the-message-channel).

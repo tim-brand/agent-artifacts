@@ -19,6 +19,8 @@ function setup(t: TestContext) {
     devUser: null,
     authEmailHeader: 'X-authentik-email',
     authNameHeader: 'X-authentik-name',
+    authMode: 'proxy',
+    authUsers: [],
   };
   let core = createCore(config);
   // A second connection, to look at rows directly and to rewind the schema.
@@ -175,7 +177,7 @@ test('the migration adds the table to an existing database', async (t) => {
   const id = await publish();
   // Later steps run again too, so their tables go as well.
   db.exec(
-    'DROP TABLE oauth_tokens; DROP TABLE oauth_codes; DROP TABLE oauth_grants; DROP TABLE oauth_clients; ' +
+    'DROP TABLE sessions; DROP TABLE oauth_tokens; DROP TABLE oauth_codes; DROP TABLE oauth_grants; DROP TABLE oauth_clients; ' +
       'DROP TABLE share_links; DROP TABLE asks; DROP TABLE comments; DROP TABLE threads; ' +
       'DROP TABLE artifact_data; ALTER TABLE artifacts DROP COLUMN capabilities; ALTER TABLE artifacts DROP COLUMN data_rev; ALTER TABLE artifacts DROP COLUMN data_floor; ' +
       'ALTER TABLE versions DROP COLUMN lines_added; ALTER TABLE versions DROP COLUMN lines_removed; PRAGMA user_version = 2;',
@@ -184,5 +186,5 @@ test('the migration adds the table to an existing database', async (t) => {
   const { token } = await shareLinks.create(id);
   assert.equal((await shareLinks.resolve(token))?.version, 1);
   const { user_version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
-  assert.equal(user_version, 8);
+  assert.equal(user_version, 9);
 });

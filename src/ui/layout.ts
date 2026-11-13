@@ -63,8 +63,10 @@ export type Nav = 'library' | 'asks' | 'trash' | 'connections' | 'connect' | 'do
 /** What every page of the app shell needs. */
 export type Shell = {
   user: string;
-  /** The display name: the name header, else the email. */
+  /** The display name: the name header, else the email. In password mode: the email. */
   name: string;
+  /** Show a Sign out button: the built-in sign-in only. */
+  signOut?: boolean;
   theme: Theme;
   summary: LibrarySummary;
   /** This page's path and query, for the theme form to come back to. */
@@ -184,6 +186,10 @@ export const themeSwitch = (theme: Theme, back: string) =>
   })}</span>
 </form>`;
 
+/** Sign out: a small form that posts to /logout. Only in the built-in sign-in (password mode). */
+export const signOutForm = () =>
+  html`<form class="signout" method="post" action="/logout"><button class="btn sm wide" type="submit">Sign out</button></form>`;
+
 /** The search form; `/` focuses the first one on the page. */
 export const searchBox = (query: string, small = false) =>
   html`<form class="search${small ? ' sm' : ''}" method="get" action="/" role="search">
@@ -228,6 +234,7 @@ ${nav('/docs/runtime', 'Live pages docs', 'book', shell.nav === 'docs')}
 <div class="who">
 <div class="who-row"><span class="av" aria-hidden="true">${initials(shell.name)}</span><span class="who-text"><span class="who-name">${shell.name}</span><small>${shell.name === shell.user ? 'signed in' : shell.user}</small></span></div>
 ${themeSwitch(shell.theme, shell.path)}
+${shell.signOut ? signOutForm() : ''}
 </div>
 </div>
 </aside>

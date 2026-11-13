@@ -45,7 +45,7 @@ There are 2 to 6 options. Their ids are 1 to 64 characters of `A-Z`, `a-z`, `0-9
 
 ### Only the owner answers
 
-The answer is set only by the web UI, behind the proxy's sign-in and the Origin check, and the answerer is the signed-in user. No MCP tool can answer: the MCP routes only get a comment service without `answer`, the `ask` schema is strict (an `answer` in it is refused), and the core stores a fresh ask built from the known fields only. Asks come only from agents: the UI's comment form never sends one, and the core refuses an ask from a typed author. The chosen `optionId` must be one of the ask's options. You can change your answer until the thread is resolved. Resolving a thread closes its asks: one that is unanswered stays unanswered.
+The answer is set only by the web UI, behind the sign-in (the proxy's, or the built-in one) and the Origin check, and the answerer is the signed-in user. No MCP tool can answer: the MCP routes only get a comment service without `answer`, the `ask` schema is strict (an `answer` in it is refused), and the core stores a fresh ask built from the known fields only. Asks come only from agents: the UI's comment form never sends one, and the core refuses an ask from a typed author. The chosen `optionId` must be one of the ask's options. You can change your answer until the thread is resolved. Resolving a thread closes its asks: one that is unanswered stays unanswered.
 
 ### What agents see
 

@@ -1,4 +1,16 @@
+import { parsePasswordHash } from './core/passwords.ts';
+
+/** An account of the built-in sign-in: a lower-case email and its password hash text. */
+export type AuthUser = { email: string; hash: string };
+
 export type Config = {
+  /**
+   * How people sign in. 'proxy': a sign-in proxy in front of the app sends the identity header.
+   * 'password': the app signs people in itself, with the accounts in `authUsers`.
+   */
+  authMode: 'proxy' | 'password';
+  /** The accounts, in password mode only; empty in proxy mode. Contains password hashes: never log it. */
+  authUsers: AuthUser[];
   port: number;
   /** SQLite file and artifact files live under here. */
   dataDir: string;
@@ -43,11 +55,54 @@ function headerName(env: NodeJS.ProcessEnv, name: string, fallback: string): str
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
+/** Does the origin name this computer: localhost, *.localhost, 127.0.0.1 or [::1]? */
+function isLoopbackOrigin(appOrigin: string): boolean {
+  const host = new URL(appOrigin).hostname;
+  return LOOPBACK_HOSTS.has(host) || host.endsWith('.localhost');
+}
+
 /** Local development: not production, and the app origin is a loopback name. */
 export function isLocalDevelopment(env: NodeJS.ProcessEnv, appOrigin: string): boolean {
   if (env.NODE_ENV === 'production') return false;
-  const host = new URL(appOrigin).hostname;
-  return LOOPBACK_HOSTS.has(host) || host.endsWith('.localhost');
+  return isLoopbackOrigin(appOrigin);
+}
+
+/** An email is safe to show in an error only when it is short and cannot be a pasted hash. */
+const shown = (email: string) =>
+  email.length > 0 && email.length <= 254 && !email.startsWith('scrypt.') ? `"${email}"` : null;
+
+/**
+ * AUTH_USERS: `email:hash` entries separated by commas and/or white space. Errors name the entry's
+ * position (and its email, when that is safe to print), and never print a hash.
+ */
+function parseUsers(text: string): AuthUser[] {
+  const users: AuthUser[] = [];
+  const seen = new Set<string>();
+  const entries = text.split(/[\s,]+/).filter((entry) => entry !== '');
+  for (const [index, entry] of entries.entries()) {
+    const where = `AUTH_USERS entry ${index + 1}`;
+    const colon = entry.indexOf(':');
+    if (colon < 0) {
+      throw new ConfigError(
+        `${where} has no ":". Each entry is email:hash, made with: node src/hash-password.ts you@example.com`,
+      );
+    }
+    const email = entry.slice(0, colon).toLowerCase();
+    const hash = entry.slice(colon + 1);
+    const name = shown(email);
+    const label = name ? `${where} (${name})` : where;
+    if (!email) throw new ConfigError(`${label} has no email before the ":"`);
+    if (/[\s,:]/.test(email)) throw new ConfigError(`${label}: the email must not contain spaces`);
+    if (!parsePasswordHash(hash)) {
+      throw new ConfigError(
+        `${label}: the password hash is not valid. Make the entry with: node src/hash-password.ts you@example.com`,
+      );
+    }
+    if (seen.has(email)) throw new ConfigError(`${label}: this email is listed twice`);
+    seen.add(email);
+    users.push({ email, hash });
+  }
+  return users;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -61,7 +116,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError('PORT must be a port number');
   }
 
+  const mode = env.AUTH_MODE || 'proxy';
+  if (mode !== 'proxy' && mode !== 'password') {
+    throw new ConfigError('AUTH_MODE must be proxy or password');
+  }
+  const usersText = env.AUTH_USERS ?? '';
+
   const config: Config = {
+    authMode: mode,
+    authUsers: mode === 'password' ? parseUsers(usersText) : [],
     port,
     dataDir: env.DATA_DIR || './data',
     appOrigin: origin(env, 'APP_ORIGIN'),
@@ -71,6 +134,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     authEmailHeader: headerName(env, 'AUTH_EMAIL_HEADER', 'X-authentik-email'),
     authNameHeader: headerName(env, 'AUTH_NAME_HEADER', 'X-authentik-name'),
   };
+
+  if (mode === 'proxy' && usersText.trim() !== '') {
+    throw new ConfigError(
+      'AUTH_USERS is set, but AUTH_MODE is not password. Set AUTH_MODE=password to use the built-in sign-in, or remove AUTH_USERS',
+    );
+  }
+  if (mode === 'password') {
+    if (config.authUsers.length === 0) {
+      throw new ConfigError(
+        'AUTH_MODE is password, but AUTH_USERS holds no account. Make an entry with: node src/hash-password.ts you@example.com',
+      );
+    }
+    if (config.devUser) {
+      throw new ConfigError(
+        'DEV_USER is set, but AUTH_MODE is password. DEV_USER would sign everyone in without a password: unset it',
+      );
+    }
+    // The cookie of a session must not travel over plain HTTP. Loopback is the exception, and it
+    // does not depend on NODE_ENV: the Docker image sets production, and people try it on localhost.
+    if (!config.appOrigin.startsWith('https:') && !isLoopbackOrigin(config.appOrigin)) {
+      throw new ConfigError(
+        'AUTH_MODE is password, so APP_ORIGIN must be https (plain http is only allowed on localhost). Serve the app over HTTPS and set APP_ORIGIN to the https address',
+      );
+    }
+  }
 
   const local = isLocalDevelopment(env, config.appOrigin);
   if (config.devUser && !local) {

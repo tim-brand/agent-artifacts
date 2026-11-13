@@ -19,6 +19,8 @@ function setup(t: TestContext) {
     devUser: null,
     authEmailHeader: 'X-authentik-email',
     authNameHeader: 'X-authentik-name',
+    authMode: 'proxy',
+    authUsers: [],
   };
   let core = createCore(config);
   t.after(() => {
@@ -313,7 +315,7 @@ test('the live pages migration runs on an existing database', async (t) => {
   const id = await ctx.publish();
   ctx.withDb((db) => {
     db.exec(
-      'DROP TABLE oauth_tokens; DROP TABLE oauth_codes; DROP TABLE oauth_grants; DROP TABLE oauth_clients; ' +
+      'DROP TABLE sessions; DROP TABLE oauth_tokens; DROP TABLE oauth_codes; DROP TABLE oauth_grants; DROP TABLE oauth_clients; ' +
         'DROP TABLE asks; DROP TABLE artifact_data; ALTER TABLE artifacts DROP COLUMN capabilities; ' +
         'ALTER TABLE artifacts DROP COLUMN data_rev; ALTER TABLE artifacts DROP COLUMN data_floor; ' +
         'ALTER TABLE versions DROP COLUMN lines_added; ALTER TABLE versions DROP COLUMN lines_removed; ' +
