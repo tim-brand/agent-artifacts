@@ -6,9 +6,8 @@ on:
     types: [completed]
     branches: [master]
 
-# One run at a time, without cancelling: a run must not be stopped halfway through a rollout. This
-# and the check below keep an older build from overwriting `latest` and rolling it out, also when its
-# CI finished after that of a newer commit.
+# One run at a time, without cancelling. This and the check below keep an older build from
+# overwriting `latest`, also when its CI finished after that of a newer commit.
 concurrency:
   group: image
 
@@ -71,19 +70,3 @@ jobs:
             ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      # A failed install must not fail a build that skips the rollout. If it's needed after all,
-      # the rollout uses the kubectl from the runner image, or fails when there is none.
-      - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5.2.0
-        continue-on-error: true
-        with:
-          version: v1.37.1
-
-      - name: Roll out the new image
-        env:
-          KUBE_DEPLOY_TOKEN: ${{ secrets.KUBE_DEPLOY_TOKEN }}
-          KUBE_DEPLOY_CA_CERT: ${{ secrets.KUBE_DEPLOY_CA_CERT }}
-          KUBE_DEPLOY_SERVER: ${{ secrets.KUBE_DEPLOY_SERVER }}
-          KUBE_DEPLOY_NAMESPACE: ${{ vars.KUBE_DEPLOY_NAMESPACE }}
-          KUBE_DEPLOY_DEPLOYMENT: ${{ vars.KUBE_DEPLOY_DEPLOYMENT }}
-        run: scripts/rollout.sh

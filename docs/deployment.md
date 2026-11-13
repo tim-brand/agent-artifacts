@@ -1,6 +1,6 @@
 # Deploying Agent Artifacts
 
-This page explains how to run your own instance: what the pieces are, how people sign in, what the reverse proxy in front of the app must do, and how to back up, upgrade and roll out. For a quick try on your own computer, see the [Quick start](../README.md#quick-start) in the README instead.
+This page explains how to run your own instance: what the pieces are, how people sign in, what the reverse proxy in front of the app must do, and how to back up and upgrade. For a quick try on your own computer, see the [Quick start](../README.md#quick-start) in the README instead.
 
 People sign in in one of two ways, chosen with `AUTH_MODE`:
 
@@ -288,18 +288,8 @@ Pull or build the new image and restart. The database schema is updated at start
 
 The secret signs the links to artifact content (`/s/…` URLs, valid for one hour) that the web UI puts in its frames. Changing it makes every link that is already out invalid. The app makes new links when a page is loaded, so the only visible effect is that a page that was open during the change must be reloaded. Public share links, personal access tokens, OAuth sign-ins and the sessions of the built-in sign-in do not use the secret and keep working. Changing the secret is safe; just restart the app with the new value.
 
-## Optional: roll out with CI
+## How the image is built
 
-`.github/workflows/image.yml` runs after the `CI` workflow succeeds on `master`. If the commit is still the tip of `master`, it builds the image and pushes it to `ghcr.io/<owner>/<repository>` of the repository that runs it, with the tags `latest` and the short commit sha (`linux/amd64` only). A fork therefore builds its own image.
+`.github/workflows/image.yml` runs after the `CI` workflow succeeds on `master`. If the commit is still the tip of `master`, it builds the image and pushes it to `ghcr.io/<owner>/<repository>` of the repository that runs it, with the tags `latest` and the short commit sha (`linux/amd64` only). A fork therefore builds its own image. `.github/workflows/release.yml` gives the image of a released commit its version tag.
 
-After the push, a step can restart a Kubernetes deployment so that it pulls the new `latest` and waits up to five minutes for it. The step is skipped when the secret `KUBE_DEPLOY_TOKEN` is not set. To use it, set these in your fork:
-
-| Name | Kind | What it is |
-| --- | --- | --- |
-| `KUBE_DEPLOY_TOKEN` | secret | A service account token that may restart the deployment. |
-| `KUBE_DEPLOY_CA_CERT` | secret | The CA certificate of the cluster's API server, as PEM text. |
-| `KUBE_DEPLOY_SERVER` | secret | The API server address, for example `https://kubernetes.example.com:6443`. |
-| `KUBE_DEPLOY_NAMESPACE` | variable | The namespace of the deployment. Default `agent-artifacts`. |
-| `KUBE_DEPLOY_DEPLOYMENT` | variable | The name of the deployment. Default `agent-artifacts`. |
-
-If the token is set but the certificate or the server is not, the step fails with an error. The deployment must use the `latest` tag of your image and pull it when it starts. The script is `scripts/rollout.sh`.
+Nothing in this repository deploys the image: that belongs to the place that runs it. To stay up to date, put the version tag in your own deployment and let a tool such as [Renovate](https://docs.renovatebot.com/) propose the next release. Tell it to look at version tags only (`0.2.0`), because the image also has a tag for every commit.
