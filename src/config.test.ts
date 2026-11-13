@@ -13,6 +13,8 @@ const PUBLIC = {
   APP_ORIGIN: 'https://artifacts.example.com',
   CONTENT_ORIGIN: 'https://artifacts-content.example.com',
   SIGNING_SECRET: SECRET,
+  // Proxy mode, the default, does not start without it.
+  AUTH_EMAIL_HEADER: 'X-Forwarded-Email',
 };
 const PLACEHOLDER = 'change-me-change-me-change-me-change-me';
 
@@ -22,10 +24,32 @@ const refused = (env: NodeJS.ProcessEnv, pattern: RegExp) =>
     (error: unknown) => error instanceof ConfigError && pattern.test(error.message),
   );
 
-test('the identity headers default to the Authentik names', () => {
+test('proxy mode needs AUTH_EMAIL_HEADER: there is no default', () => {
+  const missing = /AUTH_MODE is proxy.*AUTH_EMAIL_HEADER is not set.*AUTH_MODE=password/;
+  refused({ ...PUBLIC, AUTH_EMAIL_HEADER: undefined }, missing);
+  refused({ ...PUBLIC, AUTH_EMAIL_HEADER: '' }, missing);
+  refused({ ...PUBLIC, AUTH_MODE: 'proxy', AUTH_EMAIL_HEADER: undefined }, missing);
+  // The name header alone does not say who is signed in.
+  refused({ ...PUBLIC, AUTH_EMAIL_HEADER: undefined, AUTH_NAME_HEADER: 'Remote-Name' }, missing);
+  // Not on localhost either, when nothing stands in for the proxy.
+  refused(LOCAL, missing);
+});
+
+test('the name header is optional and has no default', () => {
   const config = loadConfig(PUBLIC);
-  assert.equal(config.authEmailHeader, 'X-authentik-email');
-  assert.equal(config.authNameHeader, 'X-authentik-name');
+  assert.equal(config.authEmailHeader, 'X-Forwarded-Email');
+  assert.equal(config.authNameHeader, null);
+  assert.equal(loadConfig({ ...PUBLIC, AUTH_NAME_HEADER: '' }).authNameHeader, null);
+});
+
+test('DEV_USER stands in for the email header in local development', () => {
+  const config = loadConfig({ ...LOCAL, DEV_USER: 'dev@example.com' });
+  assert.equal(config.authEmailHeader, null);
+  assert.equal(config.authNameHeader, null);
+  const both = loadConfig({ ...LOCAL, DEV_USER: 'dev@example.com', AUTH_EMAIL_HEADER: 'X-Email' });
+  assert.equal(both.authEmailHeader, 'X-Email');
+  // Outside local development DEV_USER is refused, so it cannot replace the header there.
+  refused({ ...PUBLIC, AUTH_EMAIL_HEADER: undefined, DEV_USER: 'dev@example.com' }, /DEV_USER/);
 });
 
 test('the identity headers can be set, and must be header names', () => {
@@ -62,7 +86,15 @@ test('DEV_USER is refused outside local development', () => {
 
 test('the placeholder secret is refused outside local development', () => {
   refused({ ...PUBLIC, SIGNING_SECRET: PLACEHOLDER }, /placeholder.*openssl rand -base64 32/);
-  refused({ ...LOCAL, NODE_ENV: 'production', SIGNING_SECRET: PLACEHOLDER }, /placeholder/);
+  refused(
+    {
+      ...LOCAL,
+      NODE_ENV: 'production',
+      SIGNING_SECRET: PLACEHOLDER,
+      AUTH_EMAIL_HEADER: 'X-Forwarded-Email',
+    },
+    /placeholder/,
+  );
   assert.ok(loadConfig(PUBLIC));
 });
 
@@ -237,6 +269,13 @@ test('AUTH_USERS without AUTH_MODE=password is refused, so a typo cannot leave t
   // A blank value is not set.
   assert.equal(loadConfig({ ...PUBLIC, AUTH_USERS: '' }).authMode, 'proxy');
   assert.equal(loadConfig({ ...PUBLIC, AUTH_USERS: '  ' }).authMode, 'proxy');
+});
+
+test('password mode does not need the identity headers', () => {
+  const config = loadConfig({ ...PASSWORD, AUTH_EMAIL_HEADER: undefined });
+  assert.equal(config.authMode, 'password');
+  assert.equal(config.authEmailHeader, null);
+  assert.equal(config.authNameHeader, null);
 });
 
 test('in password mode the identity header settings are still validated, and DEV_USER stays refused in proxy mode as before', () => {

@@ -113,6 +113,7 @@ jobs:
             -v agent-artifacts-data:/data \
             -e APP_ORIGIN=http://app.test \
             -e CONTENT_ORIGIN=http://content.test \
+            -e AUTH_EMAIL_HEADER=X-Forwarded-Email \
             -e SIGNING_SECRET \
             agent-artifacts:ci
           for _ in $(seq 1 30); do

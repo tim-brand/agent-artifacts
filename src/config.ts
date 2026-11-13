@@ -21,10 +21,13 @@ export type Config = {
   signingSecret: string;
   /** Local dev only: used as the signed-in user when no sign-in proxy header is present. */
   devUser: string | null;
-  /** The request header in which the sign-in proxy sends the user's email. */
-  authEmailHeader: string;
-  /** The request header in which the sign-in proxy sends the user's display name. */
-  authNameHeader: string;
+  /**
+   * The request header in which the sign-in proxy sends the user's email. There is no default: in
+   * proxy mode it is null only when `devUser` is set (local development).
+   */
+  authEmailHeader: string | null;
+  /** The request header with the user's display name. Null when not set: the email is shown. */
+  authNameHeader: string | null;
 };
 
 /** A bad or missing setting. The server prints its message on one line and exits. */
@@ -45,8 +48,10 @@ function origin(env: NodeJS.ProcessEnv, name: string): string {
   }
 }
 
-function headerName(env: NodeJS.ProcessEnv, name: string, fallback: string): string {
-  const value = env[name] || fallback;
+/** A header name, or null when the setting is empty. Every proxy names these differently, so there is no default. */
+function headerName(env: NodeJS.ProcessEnv, name: string): string | null {
+  const value = env[name];
+  if (!value) return null;
   if (!/^[A-Za-z0-9-]+$/.test(value)) {
     throw new ConfigError(`${name} must be an HTTP header name (letters, digits and - only)`);
   }
@@ -135,13 +140,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     contentOrigin: origin(env, 'CONTENT_ORIGIN'),
     signingSecret,
     devUser: env.DEV_USER || null,
-    authEmailHeader: headerName(env, 'AUTH_EMAIL_HEADER', 'X-authentik-email'),
-    authNameHeader: headerName(env, 'AUTH_NAME_HEADER', 'X-authentik-name'),
+    authEmailHeader: headerName(env, 'AUTH_EMAIL_HEADER'),
+    authNameHeader: headerName(env, 'AUTH_NAME_HEADER'),
   };
 
   if (mode === 'proxy' && usersText.trim() !== '') {
     throw new ConfigError(
       'AUTH_USERS is set, but AUTH_MODE is not password. Set AUTH_MODE=password to use the built-in sign-in, or remove AUTH_USERS',
+    );
+  }
+  // Without the header nobody could sign in, and every page would say so. DEV_USER stands in for
+  // the proxy in local development; outside it, DEV_USER is refused below.
+  if (mode === 'proxy' && !config.authEmailHeader && !config.devUser) {
+    throw new ConfigError(
+      "AUTH_MODE is proxy (the default), but AUTH_EMAIL_HEADER is not set. Set it to the request header in which your sign-in proxy sends the user's email (docs/deployment.md lists the names for common proxies), or set AUTH_MODE=password to use the built-in sign-in",
     );
   }
   if (mode === 'password') {

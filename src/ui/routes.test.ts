@@ -508,6 +508,32 @@ describe('auth', () => {
     assert.doesNotMatch(body, /Authentik/);
   });
 
+  it('without a name header setting it shows the email, and reads no name from any header', async () => {
+    const { app } = fakeDeps({ config: { authNameHeader: null } });
+    const res = await app.request(`${APP}/`, {
+      headers: { ...USER, 'X-authentik-name': 'Mallory', 'X-Forwarded-Preferred-Username': 'Eve' },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.match(body, /<span class="who-name">owner@example\.com<\/span>/);
+    assert.doesNotMatch(body, /Mallory|Eve/);
+  });
+
+  it('without an email header setting only DEV_USER signs in, and no header does', async () => {
+    const dev = fakeDeps({ config: { authEmailHeader: null, devUser: 'dev@example.com' } });
+    const signedIn = await dev.app.request(`${APP}/`);
+    assert.equal(signedIn.status, 200);
+    assert.match(await signedIn.text(), /dev@example\.com/);
+
+    // loadConfig refuses this combination; the middleware must still let nobody in.
+    const { app } = fakeDeps({ config: { authEmailHeader: null, devUser: null } });
+    const res = await app.request(`${APP}/`, {
+      headers: { ...USER, null: 'owner@example.com', 'X-Forwarded-Email': 'owner@example.com' },
+    });
+    assert.equal(res.status, 401);
+    assert.match(await res.text(), /AUTH_EMAIL_HEADER/);
+  });
+
   it('limits a form post to 64 KB, by the bytes read', async () => {
     const { app } = fakeDeps({});
     const headers = {
