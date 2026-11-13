@@ -25,7 +25,7 @@ Build it from a clone of the repository:
 docker build -t agent-artifacts .
 ```
 
-Or pull the image that the project's CI publishes (`linux/amd64` only):
+Or pull the image that the project's CI publishes, for `linux/amd64` and `linux/arm64` (a Raspberry Pi, an ARM server, Docker on an Apple-silicon Mac). Releases up to 0.3.0 are `linux/amd64` only:
 
 ```bash
 docker pull ghcr.io/tim-brand/agent-artifacts:0.3.0
@@ -291,6 +291,6 @@ The secret signs the links to artifact content (`/s/…` URLs, valid for one hou
 
 ## How the image is built
 
-`.github/workflows/image.yml` runs after the `CI` workflow succeeds on `master`. If the commit is still the tip of `master`, it builds the image and pushes it to `ghcr.io/<owner>/<repository>` of the repository that runs it, with the tags `latest` and the short commit sha (`linux/amd64` only). A fork therefore builds its own image. `.github/workflows/release.yml` gives the image of a released commit its version tag.
+`.github/workflows/image.yml` runs after the `CI` workflow succeeds on `master`. If the commit is still the tip of `master`, it builds the image and pushes it to `ghcr.io/<owner>/<repository>` of the repository that runs it, with the tags `latest` and the short commit sha, for `linux/amd64` and `linux/arm64`. CI builds and starts the image on a runner of each architecture before that. A fork therefore builds its own image. `.github/workflows/release.yml` gives the image of a released commit its version tag.
 
 Nothing in this repository deploys the image: that belongs to the place that runs it. To stay up to date, put the version tag in your own deployment and let a tool such as [Renovate](https://docs.renovatebot.com/) propose the next release. Tell it to look at version tags only (`0.3.0`), because the image also has a tag for every commit.
