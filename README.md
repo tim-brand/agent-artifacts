@@ -62,7 +62,7 @@ To run it for real, the app goes behind a reverse proxy that serves it over HTTP
 node src/hash-password.ts you@example.com
 ```
 
-It asks for a password and prints `you@example.com:scrypt.…`. Paste that after `AUTH_USERS=`. In the Docker image: `docker run --rm -it ghcr.io/tim-brand/agent-artifacts:latest node src/hash-password.ts you@example.com` (the built-in sign-in is newer than release 0.1.0, so use `latest` or a later release). The proxy only has to serve HTTPS, pass `Host` through and set `X-Forwarded-For`. See [Built-in sign-in](docs/deployment.md#built-in-sign-in).
+It asks for a password and prints `you@example.com:scrypt.…`. Paste that after `AUTH_USERS=`. In the Docker image: `docker run --rm -it ghcr.io/tim-brand/agent-artifacts:0.2.0 node src/hash-password.ts you@example.com`. The proxy only has to serve HTTPS, pass `Host` through and set `X-Forwarded-For`. See [Built-in sign-in](docs/deployment.md#built-in-sign-in).
 
 **Sign-in proxy** (`AUTH_MODE=proxy`, the default), for an identity provider. The app trusts the identity that the proxy sends in a request header (by default `X-authentik-email`; Authentik is just one example, and any proxy works). The rules that keep this safe:
 
