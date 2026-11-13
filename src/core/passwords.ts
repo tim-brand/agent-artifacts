@@ -120,6 +120,15 @@ export type PasswordChecker = {
   check(email: string, password: string): Promise<'ok' | 'wrong' | 'busy'>;
 };
 
+/** The hash that takes the longest to check: scrypt's time grows with N times p. */
+export const mostExpensive = <T extends { logN: number; p: number }>(
+  hashes: readonly T[],
+): T | null =>
+  hashes.reduce<T | null>(
+    (most, hash) => (!most || 2 ** hash.logN * hash.p > 2 ** most.logN * most.p ? hash : most),
+    null,
+  );
+
 /**
  * Checks passwords against the accounts, with at most `concurrency` scrypt runs at once (each uses
  * tens of MiB) and at most `waiting` more queued.
@@ -136,12 +145,14 @@ export function createPasswordChecker(
     if (!hash) throw new Error(`The password hash of account ${account.email} is not valid`);
     parsed.set(account.email, hash);
   }
-  // Made once, with the cost of the configured hashes, so an unknown email costs the same time.
-  const first = parsed.values().next().value;
+  // Made once, with the cost of the most expensive configured hash, so an unknown email is never
+  // quicker than a real account. (Accounts whose hashes differ in cost differ in time themselves;
+  // the command always writes the same cost.)
+  const costliest = mostExpensive([...parsed.values()]);
   const dummy = (async () => {
     const text = await hashPassword(randomBytes(16).toString('hex'), {
-      logN: first?.logN ?? opts.cost?.logN,
-      p: first?.p ?? opts.cost?.p,
+      logN: costliest?.logN ?? opts.cost?.logN,
+      p: costliest?.p ?? opts.cost?.p,
     });
     return parsePasswordHash(text) as ParsedHash;
   })();

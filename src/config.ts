@@ -93,6 +93,10 @@ function parseUsers(text: string): AuthUser[] {
     const label = name ? `${where} (${name})` : where;
     if (!email) throw new ConfigError(`${label} has no email before the ":"`);
     if (/[\s,:]/.test(email)) throw new ConfigError(`${label}: the email must not contain spaces`);
+    // The sign-in form keeps at most this many characters, so a longer one could never sign in.
+    if (email.length > 254) {
+      throw new ConfigError(`${where}: the email is longer than 254 characters`);
+    }
     if (!parsePasswordHash(hash)) {
       throw new ConfigError(
         `${label}: the password hash is not valid. Make the entry with: node src/hash-password.ts you@example.com`,

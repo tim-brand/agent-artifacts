@@ -38,9 +38,5 @@ export function safeNext(value: unknown, appOrigin: string): string {
   return next;
 }
 
-/** The reverse proxy sets X-Forwarded-For. Without it, everyone shares one bucket. */
-export const clientAddress = (forwardedFor: string | undefined): string =>
-  forwardedFor?.split(',')[0]?.trim() || 'unknown';
-
 /** The most characters of an email that are kept (the longest legal address is 254). */
 export const MAX_EMAIL = 254;

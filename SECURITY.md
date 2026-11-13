@@ -25,7 +25,7 @@ The app makes these promises. Breaking one is a vulnerability:
 - The identity headers are trusted only in the web UI, and only with `AUTH_MODE=proxy` (the default), where the UI sits behind the sign-in proxy. Nothing else reads them: not `/mcp`, not the content host, not a public endpoint. With `AUTH_MODE=password` they are not read at all.
 - With the built-in sign-in (`AUTH_MODE=password`), a request is signed in only by a valid session cookie, and only the web UI reads that cookie. The content host sets no cookie.
 - Tokens and other credentials the app issues are stored only as hashes, compared in constant time, and never logged. Passwords are only ever kept as scrypt hashes, and session tokens as SHA-256.
-- Sign-in attempts are rate limited, an unknown email costs the same as a wrong password, and sign-in and sign-out pass the Origin check.
+- Sign-in attempts are rate limited, an unknown email costs as much as a wrong password for the most expensive account, and sign-in and sign-out pass the Origin check.
 - Writes from the web UI pass the Origin check (CSRF).
 - Everything that comes from an artifact, an agent or a user is escaped.
 - Artifact frames keep their iframe sandbox rules.

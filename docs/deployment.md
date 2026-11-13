@@ -126,14 +126,14 @@ A request for a page without a session is redirected to `/login?next=<the page>`
 
 Anything else without a session gets a 401 page that says "Sign in first.", with no redirect: a write, and everything under `/api/`. Only `/login`, a sign-out (`POST /logout`, which then just goes to the login page), `/static/` (the page's CSS, script and fonts), `/mcp`, `/healthz` and the six public OAuth paths answer without a session. `/mcp` and the OAuth paths use their own tokens, and never look at a session.
 
-A wrong email and a wrong password get the same answer, "Wrong email or password.", and take about the same time: an unknown email is checked against a dummy hash made at startup. The sidebar shows a **Sign out** button under the theme switch. The account menu of the artifact page has one too.
+A wrong email and a wrong password get the same answer, "Wrong email or password.", and take about the same time: an unknown email is checked against a dummy hash made at startup, with the cost of the most expensive hash in `AUTH_USERS`. The command always writes the same cost; if you mix hashes of different costs, the cheaper accounts answer faster than an unknown email. The sidebar shows a **Sign out** button under the theme switch. The account menu of the artifact page has one too.
 
 ### The session
 
 - A sign-in makes a random 32 byte token. The browser keeps it in a cookie, and the app stores only its SHA-256 in the `sessions` table. Every sign-in makes a new token.
-- The cookie is `__Host-aa_session` when `APP_ORIGIN` is `https`, and `aa_session` on a local `http` address. It is `HttpOnly`, `SameSite=Lax`, `Path=/`, has no `Domain`, is `Secure` on https, and lasts 30 days. Because it has no `Domain`, the browser never sends it to the content host.
+- The cookie is `__Host-aa_session` when `APP_ORIGIN` is `https`, and `aa_session` on a local `http` address. It is `HttpOnly`, `SameSite=Lax`, `Path=/`, has no `Domain`, is `Secure` on https, and lasts 30 days. Because it has no `Domain`, the browser never sends it to the content host. (On a local trial, cookies ignore the port: other programs on `localhost` get the `aa_session` cookie too.)
 - The session slides. When it is used more than an hour after it was last renewed, its expiry moves to 30 days from now and the cookie is set again. A session that is not used for 30 days ends.
-- A session is valid only while its email is still in `AUTH_USERS` and the password has not changed. Each session remembers a SHA-256 of its account's hash text. So removing a person from `AUTH_USERS`, or giving them a new password, ends all their sessions at the next restart, with no other step.
+- A session is valid only while its email is still in `AUTH_USERS` and the password has not changed. Each session remembers a SHA-256 of its account's hash text. So removing a person from `AUTH_USERS`, or giving them a new password, ends all their sessions at the next restart, with no other step. The rows stay until they expire: if you put the same entry back within 30 days (or switch to `AUTH_MODE=proxy` and back), those sessions work again. A new password for the account ends them for good.
 - **Sign out** deletes the row and clears the cookie. Expired rows are deleted by the hourly clean-up.
 
 ### Limits and what is missing
@@ -149,7 +149,7 @@ Put the app behind a reverse proxy that does only this:
 
 - **Serve HTTPS** for both hostnames. The sign-in cookie and the passwords travel over this connection.
 - **Pass the `Host` header through unchanged** (rule 2 below), and answer on both hostnames: `APP_ORIGIN` and `CONTENT_ORIGIN`.
-- **Set `X-Forwarded-For` to the real client address, replacing any value the client sent** (rule 6 below). The sign-in limits use it. Without it, every client shares one address limit of 10 attempts a minute. If the proxy appends instead of replacing, an attacker can pick the first entry and get past the address limit; the account limit still holds.
+- **Set `X-Forwarded-For` to the real client address, replacing any value the client sent** (rule 6 below). The sign-in limits use it. Without it, every client shares one address limit of 10 attempts a minute. If the proxy appends instead of replacing, an attacker can pick the first entry and get past the address limit; the account limit and the cap on password checks still hold.
 - **Allow the body sizes** of rule 8: at least 51 MiB on `/mcp`. The UI's forms take 64 KB.
 - **Keep the app's port private** (rule 1 below): the cookie and the passwords would otherwise travel in clear text, and the address limit would trust a header that the client sets.
 - **Add no sign-in of its own**, such as basic auth. The proxy must not ask for credentials on `/mcp` or the OAuth paths, or agents cannot connect.

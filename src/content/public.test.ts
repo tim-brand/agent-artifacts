@@ -244,3 +244,12 @@ test('the rate limiter refills over time and forgets idle clients', () => {
   assert.equal(limiter.take('c', 1000), true);
   assert.equal(limiter.take('a', 1000), true);
 });
+
+test('the client address of a rate limit is cut short: a client cannot choose the size of a key', async () => {
+  const { clientAddress } = await import('./rate-limit.ts');
+  assert.equal(clientAddress('203.0.113.7, 10.0.0.1'), '203.0.113.7');
+  assert.equal(clientAddress(' 2001:db8::1 '), '2001:db8::1');
+  assert.equal(clientAddress(undefined), 'unknown');
+  assert.equal(clientAddress(' , 1.2.3.4'), 'unknown');
+  assert.equal(clientAddress('x'.repeat(15_000)).length, 64);
+});

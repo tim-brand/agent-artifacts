@@ -5,6 +5,7 @@ import {
   DEFAULT_COST,
   hashPassword,
   MAX_PASSWORD_LENGTH,
+  mostExpensive,
   parsePasswordHash,
   passwordProblem,
   verifyAgainst,
@@ -127,7 +128,16 @@ test('an unknown email still runs a verification, with the same cost as a known 
   assert.ok(unknown > 2, `unknown email took ${unknown} ms`);
 });
 
-test('the checker makes its dummy hash with the cost of the configured hashes', async () => {
+test('the dummy hash takes the cost of the most expensive configured hash', () => {
+  const cheap = { logN: 14, p: 1 };
+  const middle = { logN: 14, p: 3 };
+  const costly = { logN: 16, p: 1 };
+  assert.equal(mostExpensive([cheap, costly, middle]), costly);
+  assert.equal(mostExpensive([middle, cheap]), middle);
+  assert.equal(mostExpensive([]), null);
+});
+
+test('the checker refuses a hash it cannot parse', async () => {
   const accounts = [{ email: 'a@example.com', hash: await hashPassword('password of a', COST) }];
   // No throw and no extra work for a missing account is checked above; here a bad hash is refused.
   assert.throws(

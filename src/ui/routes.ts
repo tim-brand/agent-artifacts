@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
-import { createRateLimiter } from '../content/rate-limit.ts';
+import { clientAddress, createRateLimiter } from '../content/rate-limit.ts';
 import {
   AppError,
   type AuthorizeParams,
@@ -14,7 +14,7 @@ import {
 import { createPasswordChecker, type PasswordChecker } from '../core/passwords.ts';
 import { PUBLIC_OAUTH_PATHS } from '../oauth/rules.ts';
 import { createApiRoutes } from './api.ts';
-import { clientAddress, MAX_EMAIL, safeNext } from './auth.ts';
+import { MAX_EMAIL, safeNext } from './auth.ts';
 import { docsRuntimePage } from './docs.ts';
 import {
   contentSecurityPolicy,
@@ -154,6 +154,7 @@ export function createUiRoutes(deps: Deps, options: UiOptions = {}): Hono {
       messageDocument({
         theme: theme(c),
         signedIn: Boolean(c.get('user')),
+        signIn: passwordMode && !c.get('user'),
         title,
         message: text,
         status,
@@ -266,7 +267,9 @@ export function createUiRoutes(deps: Deps, options: UiOptions = {}): Hono {
     // The Origin check above is what stops a cross-site sign-in. Whatever goes wrong gets the same
     // answer, so the page does not tell an unknown email from a wrong password.
     ui.post('/login', async (c) => {
-      const form = await c.req.parseBody();
+      // Anyone can post here, so a body that cannot be read is a plain 400, not a logged error.
+      const form = await c.req.parseBody().catch(() => null);
+      if (!form) return message(c, 400, 'Bad request', 'The form could not be read.');
       const next = safeNext(field(form, 'next'), config.appOrigin);
       const email = field(form, 'email').trim().toLowerCase().slice(0, MAX_EMAIL);
       const password = field(form, 'password');

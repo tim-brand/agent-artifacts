@@ -32,6 +32,8 @@ function promptHidden(question: string): Promise<string> {
       else resolve(line);
     };
     const onData = (chunk: string) => {
+      // An arrow or function key arrives as one chunk that starts with ESC: not part of a password.
+      if (chunk.startsWith('\u001b')) return;
       for (const char of chunk) {
         if (char === '\r' || char === '\n' || char === '\u0004') return finish();
         if (char === '\u0003') return finish(new Error('Cancelled'));
@@ -51,8 +53,9 @@ async function readFirstLine(): Promise<string> {
     text += chunk;
     if (text.includes('\n')) break;
   }
+  // Without the line ending, also when the input stops at a lone \r: no form could type that.
   const end = text.search(/\r?\n/);
-  return end < 0 ? text : text.slice(0, end);
+  return (end < 0 ? text : text.slice(0, end)).replace(/\r$/, '');
 }
 
 async function main(): Promise<number> {

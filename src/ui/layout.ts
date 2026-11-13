@@ -252,6 +252,8 @@ ${opts.body}
 export function messageDocument(opts: {
   theme: Theme;
   signedIn: boolean;
+  /** Link to the login page: the built-in sign-in, when no one is signed in. */
+  signIn?: boolean;
   title: string;
   message: string;
   status?: number;
@@ -267,6 +269,7 @@ ${opts.status ? html`<p class="status">${opts.status}</p>` : ''}
 <h1>${opts.title}</h1>
 <p class="muted">${opts.message}</p>
 ${opts.signedIn ? html`<p><a class="btn" href="/">${icon('back')}Back to the library</a></p>` : ''}
+${opts.signIn ? html`<p><a class="btn" href="/login">Sign in</a></p>` : ''}
 </div>
 </main>`,
   });

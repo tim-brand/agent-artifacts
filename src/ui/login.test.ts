@@ -147,6 +147,7 @@ describe('without a session', () => {
       assert.equal(location(res), null);
       const page = await body(res);
       assert.match(page, /Sign in first/);
+      assert.match(page, /<a class="btn" href="\/login">Sign in<\/a>/);
       assert.doesNotMatch(page, /proxy|header/i);
     }
     // Also without an Origin: the 401 comes first, as in proxy mode.
@@ -336,6 +337,18 @@ describe('signing in', () => {
     assert.equal(none.status, 403);
     assert.equal(none.headers.getSetCookie().length, 0);
     assert.equal(config.appOrigin, 'https://app.test');
+  });
+
+  it('answers a body it cannot read with 400, without checking a password', async (t) => {
+    const { request, checks } = setup(t);
+    const res = await request('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'multipart/form-data; boundary=x' },
+      body: 'not a form',
+    });
+    assert.equal(res.status, 400);
+    assert.match(await body(res), /The form could not be read/);
+    assert.equal(checks.length, 0);
   });
 
   it('limits the body to 64 KB', async (t) => {

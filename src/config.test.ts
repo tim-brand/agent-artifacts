@@ -143,6 +143,12 @@ test('AUTH_USERS: a malformed entry, an invalid hash and a duplicate are refused
   const ok = `a@example.com:${HASH_A}`;
   // No colon: it may be a bare hash, so the entry itself is never printed.
   refusedWithoutHash({ ...PASSWORD, AUTH_USERS: HASH_A }, /entry 1 has no ":"/);
+  // The sign-in form keeps 254 characters of an email, so a longer one could never sign in.
+  refusedWithoutHash(
+    { ...PASSWORD, AUTH_USERS: `${'a'.repeat(250)}@x.yz:${HASH_A}` },
+    /entry 1: the email is longer than 254 characters/,
+  );
+  assert.ok(loadConfig({ ...PASSWORD, AUTH_USERS: `${'a'.repeat(249)}@x.yz:${HASH_A}` }));
   refusedWithoutHash({ ...PASSWORD, AUTH_USERS: `${ok} ${HASH_B}` }, /entry 2 has no ":"/);
   refusedWithoutHash({ ...PASSWORD, AUTH_USERS: `:${HASH_A}` }, /entry 1 has no email/);
   refusedWithoutHash(

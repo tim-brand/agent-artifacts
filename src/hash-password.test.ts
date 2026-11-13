@@ -42,6 +42,22 @@ test('prints only the hash without an email, and accepts a last line without a n
   }
 });
 
+test('leaves the line ending out of the password, also a lone \\r at the end of the input', async () => {
+  for (const input of [
+    'a long enough password\r\n',
+    'a long enough password\r',
+    'a long enough password',
+  ]) {
+    const res = run([], input);
+    assert.equal(res.status, 0, res.stderr);
+    const parsed = parsePasswordHash(res.stdout.trim());
+    assert.ok(
+      parsed && (await verifyAgainst('a long enough password', parsed)),
+      JSON.stringify(input),
+    );
+  }
+});
+
 test('warns on stderr below 12 characters, but still prints', () => {
   const res = run(['a@example.com'], 'short\n');
   assert.equal(res.status, 0);

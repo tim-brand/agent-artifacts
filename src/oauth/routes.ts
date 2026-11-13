@@ -1,5 +1,5 @@
 import { type Context, Hono } from 'hono';
-import { createRateLimiter } from '../content/rate-limit.ts';
+import { clientAddress, createRateLimiter } from '../content/rate-limit.ts';
 import { type Deps, OAuthError, type OAuthErrorCode, type OAuthService } from '../contracts.ts';
 import { mcpResource } from './rules.ts';
 
@@ -28,9 +28,7 @@ function oauthError(
   return c.json({ error: code, error_description: description }, status ?? STATUS[code] ?? 400);
 }
 
-/** The reverse proxy sets X-Forwarded-For. Without it, everyone shares one bucket. */
-const clientIp = (c: Context) =>
-  c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+const clientIp = (c: Context) => clientAddress(c.req.header('x-forwarded-for'));
 
 async function readBody(c: Context): Promise<string | null> {
   if (Number(c.req.header('content-length') ?? 0) > MAX_BODY_BYTES) return null;
