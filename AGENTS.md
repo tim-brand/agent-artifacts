@@ -42,7 +42,7 @@ Node 24 and pnpm 10. There is no build step: Node runs the TypeScript in `src/` 
 - `src/ui/`: the web UI, server-rendered with `hono/html`. Static files in `src/ui/static/` (`app.css`, `app.js`, fonts).
 - `src/content/`: the content host. Serves files from signed `/s/` URLs and public `/p/` links; `bridge.js` is the comment bridge and the live-pages runtime.
 - `docs/`: feature and deployment documentation. `examples/`: deployment examples.
-- `scripts/rollout.sh`, `.github/workflows/`: CI, the image build and an optional rollout of the new image.
+- `.github/workflows/`: CI, the image build and the release. Nothing here deploys anywhere.
 
 Tests sit next to the code they test, as `*.test.ts`.
 
