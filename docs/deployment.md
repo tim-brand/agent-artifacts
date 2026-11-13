@@ -28,10 +28,10 @@ docker build -t agent-artifacts .
 Or pull the image that the project's CI publishes (`linux/amd64` only):
 
 ```bash
-docker pull ghcr.io/tim-brand/agent-artifacts:0.2.0
+docker pull ghcr.io/tim-brand/agent-artifacts:0.3.0
 ```
 
-Each [release](https://github.com/tim-brand/agent-artifacts/releases) has a tag like `0.2.0` that never changes. The built-in sign-in needs release 0.2.0 or later. `latest` is the newest commit on `master`, released or not; use it only if you want to follow the development.
+Each [release](https://github.com/tim-brand/agent-artifacts/releases) has a tag like `0.3.0` that never changes. The built-in sign-in needs release 0.2.0 or later. `latest` is the newest commit on `master`, released or not; use it only if you want to follow the development.
 
 The image runs as the user `node`, sets `NODE_ENV=production`, listens on port 3000, and writes only to `/data`. Mount a persistent volume there. A directory you mount from the host must be writable by the `node` user (uid 1000). A minimal run command looks like this. It does not start as it is: add the settings for how people sign in, either `AUTH_EMAIL_HEADER` for a sign-in proxy or `AUTH_MODE=password` with `AUTH_USERS` for the built-in sign-in. The proxy still has to be set up as described below:
 
@@ -92,7 +92,7 @@ you@example.com:scrypt.15.8.3.…
 In a clone of the repository, `pnpm hash-password you@example.com` does the same. With the Docker image, run the command inside it. It needs a terminal (`-it`) to ask for the password:
 
 ```bash
-docker run --rm -it ghcr.io/tim-brand/agent-artifacts:0.2.0 node src/hash-password.ts you@example.com
+docker run --rm -it ghcr.io/tim-brand/agent-artifacts:0.3.0 node src/hash-password.ts you@example.com
 ```
 
 Notes:
@@ -293,4 +293,4 @@ The secret signs the links to artifact content (`/s/…` URLs, valid for one hou
 
 `.github/workflows/image.yml` runs after the `CI` workflow succeeds on `master`. If the commit is still the tip of `master`, it builds the image and pushes it to `ghcr.io/<owner>/<repository>` of the repository that runs it, with the tags `latest` and the short commit sha (`linux/amd64` only). A fork therefore builds its own image. `.github/workflows/release.yml` gives the image of a released commit its version tag.
 
-Nothing in this repository deploys the image: that belongs to the place that runs it. To stay up to date, put the version tag in your own deployment and let a tool such as [Renovate](https://docs.renovatebot.com/) propose the next release. Tell it to look at version tags only (`0.2.0`), because the image also has a tag for every commit.
+Nothing in this repository deploys the image: that belongs to the place that runs it. To stay up to date, put the version tag in your own deployment and let a tool such as [Renovate](https://docs.renovatebot.com/) propose the next release. Tell it to look at version tags only (`0.3.0`), because the image also has a tag for every commit.
