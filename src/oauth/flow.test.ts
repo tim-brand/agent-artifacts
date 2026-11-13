@@ -25,6 +25,8 @@ function setup(t: TestContext) {
     devUser: null,
     authEmailHeader: 'X-authentik-email',
     authNameHeader: 'X-authentik-name',
+    authMode: 'proxy',
+    authUsers: [],
   };
   const core = createCore(config);
   const app = createApp({ config, ...core });

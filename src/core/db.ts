@@ -246,6 +246,20 @@ const MIGRATIONS: Migration[] = [
   ) WITHOUT ROWID;
   CREATE INDEX oauth_tokens_by_grant ON oauth_tokens (grant_id);
   `,
+  // Sessions of the built-in sign-in (AUTH_MODE=password). The token is stored only as its SHA-256.
+  // credential is the SHA-256 of the account's password hash text at sign-in: a changed password
+  // or a removed account ends the session. Timestamps are ISO strings, like every other table.
+  `
+  CREATE TABLE sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_email TEXT NOT NULL,
+    credential TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  ) WITHOUT ROWID;
+  CREATE INDEX sessions_by_expiry ON sessions (expires_at);
+  `,
 ];
 
 export function openDb(dataDir: string, blobs: BlobStore): DatabaseSync {

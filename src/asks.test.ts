@@ -23,6 +23,8 @@ async function setup(t: TestContext) {
     devUser: null,
     authEmailHeader: 'X-authentik-email',
     authNameHeader: 'X-authentik-name',
+    authMode: 'proxy',
+    authUsers: [],
   };
   const core = createCore(config);
   t.after(() => {

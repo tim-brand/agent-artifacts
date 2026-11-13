@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { getCookie, setCookie } from 'hono/cookie';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
+import { clientAddress, createRateLimiter } from '../content/rate-limit.ts';
 import {
   AppError,
   type AuthorizeParams,
@@ -9,8 +11,10 @@ import {
   type LibraryFilter,
   type ShareLink,
 } from '../contracts.ts';
+import { createPasswordChecker, type PasswordChecker } from '../core/passwords.ts';
 import { PUBLIC_OAUTH_PATHS } from '../oauth/rules.ts';
 import { createApiRoutes } from './api.ts';
+import { MAX_EMAIL, safeNext } from './auth.ts';
 import { docsRuntimePage } from './docs.ts';
 import {
   contentSecurityPolicy,
@@ -33,13 +37,19 @@ import {
   type LibraryTab,
   type LibraryView,
   libraryPage,
+  loginPage,
   PANEL_TABS,
   type PanelTab,
   searchPage,
   trashPage,
 } from './views.ts';
 
-type Env = { Variables: { user: string } };
+/**
+ * user: the signed-in email. name: the display name. viewerName: the name the `viewer` capability
+ * shows to a live page ('' when there is none). The identity middleware below is the only place
+ * that decides all three, for both sign-in modes.
+ */
+type Env = { Variables: { user: string; name: string; viewerName: string } };
 type Form = Record<string, string | File | (string | File)[]>;
 
 /** A text form field, or '' when it is missing or not text. */
@@ -83,15 +93,47 @@ const TAB_FILTERS: Record<LibraryTab, LibraryFilter> = {
 };
 
 /**
- * The web UI, mounted at / on the app host behind a sign-in proxy (forward auth). The signed-in
- * user comes from the AUTH_EMAIL_HEADER request header (or DEV_USER locally). Every POST must come
- * from the app origin.
+ * The web UI, mounted at / on the app host. Who is signed in depends on AUTH_MODE:
+ *   proxy (the default): a sign-in proxy (forward auth) sends the user in the AUTH_EMAIL_HEADER
+ *     request header (or DEV_USER locally). Sessions and /login do not exist.
+ *   password: the user comes only from a valid session cookie, made at /login. The identity
+ *     headers are never read.
+ * Every POST must come from the app origin.
  */
-export function createUiRoutes(deps: Deps): Hono {
-  const { config, artifacts, comments, tokens, oauth, shareLinks, signer } = deps;
+export type UiOptions = {
+  /** Replaces the password checker of the built-in sign-in. For tests. */
+  checker?: PasswordChecker;
+};
+
+export function createUiRoutes(deps: Deps, options: UiOptions = {}): Hono {
+  const { config, artifacts, comments, tokens, oauth, shareLinks, signer, sessions } = deps;
   const csp = contentSecurityPolicy(config.contentOrigin);
   const secure = config.appOrigin.startsWith('https:');
+  const passwordMode = config.authMode === 'password';
   const ui = new Hono<Env>();
+
+  // ---- The built-in sign-in (password mode only) ----
+  // The __Host- prefix makes browsers accept the cookie only with Secure, Path=/ and no Domain.
+  const sessionCookie = secure ? '__Host-aa_session' : 'aa_session';
+  const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+  /** What a session remembers of its account: a hash of the password hash text. */
+  const credentials = new Map(config.authUsers.map((u) => [u.email, sha256(u.hash)]));
+  const credentialOf = (email: string) => credentials.get(email) ?? null;
+  // Per client address, and per account (typed email, existing or not).
+  const addressLimit = createRateLimiter({ capacity: 10, perMinute: 10 });
+  const accountLimit = createRateLimiter({ capacity: 5, perMinute: 5 });
+  // Only built in password mode: it makes a dummy hash, which costs a moment.
+  const checker = passwordMode
+    ? (options.checker ?? createPasswordChecker(config.authUsers))
+    : null;
+  const setSession = (c: Context<Env>, token: string, maxAgeSeconds: number) =>
+    setCookie(c, sessionCookie, token, {
+      path: '/',
+      maxAge: maxAgeSeconds,
+      httpOnly: true,
+      sameSite: 'Lax',
+      secure,
+    });
 
   const remember = (c: Context<Env>, name: string, value: string) =>
     setCookie(c, name, value, {
@@ -112,6 +154,7 @@ export function createUiRoutes(deps: Deps): Hono {
       messageDocument({
         theme: theme(c),
         signedIn: Boolean(c.get('user')),
+        signIn: passwordMode && !c.get('user'),
         title,
         message: text,
         status,
@@ -130,7 +173,8 @@ export function createUiRoutes(deps: Deps): Hono {
     const user = c.get('user');
     return {
       user,
-      name: c.req.header(config.authNameHeader) || user,
+      name: c.get('name'),
+      signOut: passwordMode,
       theme: theme(c),
       summary: await artifacts.summary(),
       path: extra.path ?? `${url.pathname}${url.search}`,
@@ -152,7 +196,33 @@ export function createUiRoutes(deps: Deps): Hono {
     if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
   });
 
+  // Who is signed in: the one place that decides it, for both modes.
   ui.use('*', async (c, next) => {
+    if (passwordMode) {
+      const page = c.req.method === 'GET' || c.req.method === 'HEAD';
+      // The login page needs its CSS, script and fonts without a session (reads only).
+      if (page && c.req.path.startsWith('/static/')) return next();
+      // Only a valid session counts. The identity headers are not read in this mode.
+      const token = getCookie(c, sessionCookie);
+      const session = token ? await sessions.verify(token, credentialOf) : null;
+      if (token && session?.renewed) setSession(c, token, session.maxAgeSeconds);
+      if (session) {
+        c.set('user', session.email);
+        c.set('name', session.email);
+        c.set('viewerName', '');
+        return next();
+      }
+      // Open without a session: the login page, and a sign-out (a no-op then; it still passes the
+      // Origin check below). A sign-out with an ended session should land on the login page.
+      if (c.req.path === '/login') return next();
+      if (c.req.path === '/logout' && c.req.method === 'POST') return next();
+      if (page && !c.req.path.startsWith('/api/')) {
+        const url = new URL(c.req.url);
+        const back = new URLSearchParams({ next: `${url.pathname}${url.search}` });
+        return c.redirect(`/login?${back}`, 302);
+      }
+      return message(c, 401, 'Not signed in', 'Sign in first.');
+    }
     const user = c.req.header(config.authEmailHeader) || config.devUser;
     if (!user) {
       return message(
@@ -162,7 +232,10 @@ export function createUiRoutes(deps: Deps): Hono {
         `This app has no sign-in of its own. A sign-in proxy in front of it must send the signed-in user's email in the ${config.authEmailHeader} request header, and that header is missing.`,
       );
     }
+    const headerName = c.req.header(config.authNameHeader);
     c.set('user', user);
+    c.set('name', headerName || user);
+    c.set('viewerName', headerName ?? '');
     await next();
   });
 
@@ -180,6 +253,52 @@ export function createUiRoutes(deps: Deps): Hono {
     onError: (c) => c.text('The request body is too large', 413),
   });
   ui.use('*', (c, next) => (c.req.path.startsWith('/api/') ? next() : formLimit(c, next)));
+
+  if (passwordMode) {
+    const SIGN_IN_FAILED = 'Wrong email or password.';
+    const TOO_MANY = 'Too many attempts. Wait a minute and try again.';
+
+    ui.get('/login', (c) => {
+      const next = safeNext(c.req.query('next'), config.appOrigin);
+      if (c.get('user')) return c.redirect(next, 302);
+      return c.html(loginPage({ theme: theme(c), email: '', next }));
+    });
+
+    // The Origin check above is what stops a cross-site sign-in. Whatever goes wrong gets the same
+    // answer, so the page does not tell an unknown email from a wrong password.
+    ui.post('/login', async (c) => {
+      // Anyone can post here, so a body that cannot be read is a plain 400, not a logged error.
+      const form = await c.req.parseBody().catch(() => null);
+      if (!form) return message(c, 400, 'Bad request', 'The form could not be read.');
+      const next = safeNext(field(form, 'next'), config.appOrigin);
+      const email = field(form, 'email').trim().toLowerCase().slice(0, MAX_EMAIL);
+      const password = field(form, 'password');
+      const again = (status: 401 | 429, error: string) =>
+        c.html(loginPage({ theme: theme(c), email, next, error }), status);
+
+      // Both limits are checked before any password is, so a flood costs no scrypt work.
+      const address = clientAddress(c.req.header('x-forwarded-for'));
+      if (!addressLimit.take(address) || !accountLimit.take(email)) return again(429, TOO_MANY);
+
+      const result = await (checker as NonNullable<typeof checker>).check(email, password);
+      if (result === 'busy') return again(429, TOO_MANY);
+      if (result !== 'ok') return again(401, SIGN_IN_FAILED);
+
+      // A new token every time (no session fixation); a session the browser already had is ended.
+      const old = getCookie(c, sessionCookie);
+      if (old) await sessions.destroy(old);
+      const session = await sessions.create(email, credentialOf(email) ?? '');
+      setSession(c, session.token, session.maxAgeSeconds);
+      return c.redirect(next, 303);
+    });
+
+    ui.post('/logout', async (c) => {
+      const token = getCookie(c, sessionCookie);
+      if (token) await sessions.destroy(token);
+      deleteCookie(c, sessionCookie, { path: '/', secure });
+      return c.redirect('/login', 303);
+    });
+  }
 
   // The URLs of app.js and app.css carry a hash of their content; the fonts never change.
   ui.get('/static/*', (c) => {
@@ -274,7 +393,8 @@ export function createUiRoutes(deps: Deps): Hono {
     return c.html(
       artifactPage({
         user,
-        name: c.req.header(config.authNameHeader) || user,
+        name: c.get('name'),
+        signOut: passwordMode,
         theme: theme(c),
         artifact,
         version,
@@ -282,9 +402,7 @@ export function createUiRoutes(deps: Deps): Hono {
         threads,
         url: (path) => signer.url(artifact.id, version.version, path),
         // Rendered into the page only for an artifact that declares the viewer capability.
-        viewer: artifact.capabilities.viewer
-          ? { email: user, name: c.req.header(config.authNameHeader) ?? '' }
-          : null,
+        viewer: artifact.capabilities.viewer ? { email: user, name: c.get('viewerName') } : null,
         shareLinks: links,
         createdLink: extra.created,
         panel: panelState(c, extra.tab),
@@ -324,7 +442,8 @@ export function createUiRoutes(deps: Deps): Hono {
     return c.html(
       comparePage({
         user,
-        name: c.req.header(config.authNameHeader) || user,
+        name: c.get('name'),
+        signOut: passwordMode,
         theme: theme(c),
         comparison,
         versions,
@@ -536,7 +655,7 @@ export function createUiRoutes(deps: Deps): Hono {
         consentPage({
           theme: theme(c),
           user,
-          name: c.req.header(config.authNameHeader) || user,
+          name: c.get('name'),
           request,
           params,
         }),

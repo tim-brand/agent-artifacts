@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Hono, type HonoRequest } from 'hono';
 import type { ArtifactService, Deps } from '../contracts.ts';
-import { createRateLimiter } from './rate-limit.ts';
+import { clientAddress, createRateLimiter } from './rate-limit.ts';
 import { renderCode, renderImage, renderMarkdown } from './render.ts';
 
 /**
@@ -248,9 +248,8 @@ function securityHeaders(contentType: string, policy: Policy): Record<string, st
   };
 }
 
-/** The reverse proxy sets X-Forwarded-For. Without it, everyone shares one bucket. */
 function clientIp(req: HonoRequest): string {
-  return req.header('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+  return clientAddress(req.header('x-forwarded-for'));
 }
 
 function maxAge(exp: number): number {

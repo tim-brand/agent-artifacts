@@ -22,8 +22,10 @@ One person maintains this project in their spare time. Reports are read and answ
 The app makes these promises. Breaking one is a vulnerability:
 
 - Artifact content only runs on the content origin, never on the app origin.
-- The identity headers are trusted only in the web UI, which sits behind the sign-in proxy. Nothing else reads them: not `/mcp`, not the content host, not a public endpoint.
-- Tokens and other credentials the app issues are stored only as hashes, compared in constant time, and never logged.
+- The identity headers are trusted only in the web UI, and only with `AUTH_MODE=proxy` (the default), where the UI sits behind the sign-in proxy. Nothing else reads them: not `/mcp`, not the content host, not a public endpoint. With `AUTH_MODE=password` they are not read at all.
+- With the built-in sign-in (`AUTH_MODE=password`), a request is signed in only by a valid session cookie, and only the web UI reads that cookie. The content host sets no cookie.
+- Tokens and other credentials the app issues are stored only as hashes, compared in constant time, and never logged. Passwords are only ever kept as scrypt hashes, and session tokens as SHA-256.
+- Sign-in attempts are rate limited, an unknown email costs as much as a wrong password for the most expensive account, and sign-in and sign-out pass the Origin check.
 - Writes from the web UI pass the Origin check (CSRF).
 - Everything that comes from an artifact, an agent or a user is escaped.
 - Artifact frames keep their iframe sandbox rules.
@@ -33,4 +35,6 @@ The app makes these promises. Breaking one is a vulnerability:
 
 ## What does not count
 
-The app has no sign-in of its own. It trusts the identity header that the reverse proxy in front of it sends. An instance that can be reached without that proxy, or whose proxy passes a client's own identity headers through, is a deployment mistake, not a vulnerability in the app. The deployment section of the README explains what the proxy must do.
+With `AUTH_MODE=proxy`, the app trusts the identity header that the reverse proxy in front of it sends. An instance that can be reached without that proxy, or whose proxy passes a client's own identity headers through, is a deployment mistake, not a vulnerability in the app. The deployment section of the README explains what the proxy must do.
+
+The built-in sign-in is small on purpose. A weak password, a leaked `AUTH_USERS` value, serving it without HTTPS, and a proxy that does not set `X-Forwarded-For` (so the address limit is shared) are deployment mistakes. The missing password reset, second factor and lockout beyond the rate limit are known limits of the design, not vulnerabilities: see [Built-in sign-in](docs/deployment.md#built-in-sign-in).

@@ -4,7 +4,7 @@ This page describes how MCP clients (Claude Code, OpenCode, Codex and others) si
 
 ## How it works
 
-MCP clients expect an authorization server that supports dynamic client registration, which many identity providers do not offer. So the app is its own small OAuth 2.1 authorization server (`src/core/oauth.ts` and `src/oauth/`). The sign-in itself is still your proxy's: the consent page sits behind the same sign-in as the web UI, so only a person who is signed in can allow an agent.
+MCP clients expect an authorization server that supports dynamic client registration, which many identity providers do not offer. So the app is its own small OAuth 2.1 authorization server (`src/core/oauth.ts` and `src/oauth/`). The sign-in itself is not done here: the consent page sits behind the same sign-in as the web UI (your proxy's, or the built-in one), so only a person who is signed in can allow an agent. With the built-in sign-in, an agent that opens the consent page sends you to the login page first, and you come back to the same consent page.
 
 The flow:
 
@@ -15,7 +15,7 @@ The flow:
 
 ## Public endpoints
 
-The reverse proxy must leave these open, with no sign-in (see [Deployment](deployment.md#what-the-reverse-proxy-must-do)). Nothing here reads the identity headers.
+With a sign-in proxy, the proxy must leave these open, with no sign-in (see [Deployment](deployment.md#what-the-reverse-proxy-must-do)). With the built-in sign-in there is nothing to leave open: the app answers them before the sign-in. Nothing here reads the identity headers or the session cookie.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ The page is titled "Connect <client>?" and says that the app will be able to pub
 
 - **App:** the client's name, marked "named by the app itself". The client chooses its own name, so treat it as a claim, not proof.
 - **Returns to:** the host where your browser goes after you click Allow. A loopback address is marked "an app on this computer". For any other host, a warning says that your browser goes to that site and to allow it only if you know it.
-- **Signed in as:** you, from the identity header.
+- **Signed in as:** you, from the identity header or, with the built-in sign-in, your session.
 
 Only allow a connection that you just started yourself.
 

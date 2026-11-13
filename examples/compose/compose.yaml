@@ -1,4 +1,4 @@
-# Agent Artifacts behind Caddy with basic auth. See README.md in this folder.
+# Agent Artifacts with its built-in sign-in, behind Caddy. See README.md in this folder.
 # Copy .env.example to .env and fill it in first.
 
 name: agent-artifacts
@@ -7,19 +7,22 @@ services:
   app:
     # Build the image from this repository (the folder two levels up).
     build: ../..
-    # Or use a released image instead (linux/amd64); see the releases on GitHub for the versions:
-    # image: ghcr.io/tim-brand/agent-artifacts:0.1.0
+    # Or use a published image instead (linux/amd64). The built-in sign-in is newer than release
+    # 0.1.0, so use latest or a later release:
+    # image: ghcr.io/tim-brand/agent-artifacts:latest
     restart: unless-stopped
     environment:
       APP_ORIGIN: ${APP_ORIGIN:?set APP_ORIGIN in .env}
       CONTENT_ORIGIN: ${CONTENT_ORIGIN:?set CONTENT_ORIGIN in .env}
       SIGNING_SECRET: ${SIGNING_SECRET:?set SIGNING_SECRET in .env}
-      # The headers Caddy sets (see Caddyfile). The app trusts them, so only Caddy may reach it.
-      AUTH_EMAIL_HEADER: X-Auth-Email
-      AUTH_NAME_HEADER: X-Auth-Name
+      AUTH_MODE: password
+      # Empty is allowed here so that the account command can run before .env is complete. The app
+      # itself refuses to start without an account.
+      AUTH_USERS: ${AUTH_USERS:-}
     volumes:
       - app-data:/data
-    # No `ports:` on purpose. Only Caddy can reach the app, on the compose network.
+    # No `ports:` on purpose. Only Caddy can reach the app, on the compose network, so the client
+    # address in X-Forwarded-For comes from Caddy.
     healthcheck:
       # The image has Node but not curl or wget.
       test:
@@ -48,8 +51,6 @@ services:
     environment:
       APP_ORIGIN: ${APP_ORIGIN}
       CONTENT_ORIGIN: ${CONTENT_ORIGIN}
-      AUTH_USER: ${AUTH_USER:?set AUTH_USER in .env}
-      AUTH_HASH: ${AUTH_HASH:?set AUTH_HASH in .env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

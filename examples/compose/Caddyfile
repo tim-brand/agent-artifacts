@@ -1,75 +1,23 @@
 # Caddy in front of Agent Artifacts. Two sites, one for each host the app serves.
 #
-# The app has no sign-in of its own. On the app site it trusts the X-Auth-Email request header as
-# the signed-in user. So this file has one job above all: that header reaches the app only when
-# Caddy set it, from a successful basic-auth login.
+# The app signs people in itself (AUTH_MODE=password), so Caddy only does three things: it
+# answers on both hostnames, it serves HTTPS for real domains (certificates are automatic), and it
+# passes every request to the app. It asks for no login, adds no headers and keeps no list of paths.
 #
 # The addresses come from .env (APP_ORIGIN, CONTENT_ORIGIN). The defaults are for the local trial.
 #
-# X-Forwarded-For: the app rate-limits on the first entry. Caddy replaces a value the client
-# sent with the real client address, unless the client is in `trusted_proxies`. This file does not
-# set `trusted_proxies`. Leave it that way, unless another proxy (a CDN) sits in front of Caddy.
-
-# --- Shared snippet ------------------------------------------------------------------------------
-
-# For every request that is NOT signed in with basic auth: delete the identity headers, so a
-# client cannot claim to be a user. Header names are matched without regard to case.
-(anonymous) {
-	reverse_proxy app:3000 {
-		header_up -X-Auth-Email
-		header_up -X-Auth-Name
-	}
-}
-
-# --- App site: the web UI, /mcp and the OAuth endpoints ------------------------------------------
+# Caddy passes the Host header on unchanged, which the app needs to tell the two sites apart.
+# Caddy sets no limit on the size of a request body, so large publishes to /mcp go through.
+#
+# X-Forwarded-For: the app rate-limits sign-in attempts by the first entry. Caddy replaces a value
+# the client sent with the real client address, unless the client is in `trusted_proxies`. This
+# file does not set `trusted_proxies`. Leave it that way, unless another proxy (a CDN) sits in
+# front of Caddy.
 
 {$APP_ORIGIN:http://localhost:8080} {
-	# These paths cannot use basic auth: MCP clients and their OAuth flow cannot follow a browser
-	# login. They check bearer tokens themselves, and they never read the identity headers.
-	# This list is PUBLIC_OAUTH_PATHS in src/oauth/rules.ts, plus /mcp and /healthz.
-	#
-	# How Caddy matches `path`: the whole path must match (no * means no prefix match), it ignores
-	# case, and it decodes %-escapes first. So /MCP and /%6dcp match too. Trailing slashes and dot
-	# segments are not cleaned up: /mcp/ and /mcp/../ do not match.
-	#
-	# That is safe, whatever the match does, for two reasons. Everything this matcher accepts gets
-	# its identity headers deleted, so at worst a request reaches the app anonymously and the app
-	# answers "not signed in" (the app matches paths exactly, so /MCP is not /mcp to it). And
-	# everything it rejects needs a login. The only way to a signed-in page is the basic-auth
-	# branch below.
-	@open {
-		path /mcp /healthz
-		path /.well-known/oauth-protected-resource
-		path /.well-known/oauth-protected-resource/mcp
-		path /.well-known/oauth-authorization-server
-		path /.well-known/oauth-authorization-server/mcp
-		path /oauth/register
-		path /oauth/token
-	}
-
-	# `handle` blocks are exclusive: the first match wins, the rest are skipped.
-	handle @open {
-		import anonymous
-	}
-
-	# Everything else, including the consent page /oauth/authorize, needs a login.
-	handle {
-		basic_auth {
-			{$AUTH_USER} {$AUTH_HASH}
-		}
-		reverse_proxy app:3000 {
-			# Replace any value the client sent with the user name that just logged in.
-			header_up X-Auth-Email {http.auth.user.id}
-			# This setup has no display name: the app falls back to the email header.
-			header_up -X-Auth-Name
-		}
-	}
+	reverse_proxy app:3000
 }
 
-# --- Content site: untrusted artifact files from signed URLs -------------------------------------
-
 {$CONTENT_ORIGIN:http://content.localhost:8080} {
-	# No sign-in: the signature in the URL is the access check. No identity headers either; this
-	# host never needs them.
-	import anonymous
+	reverse_proxy app:3000
 }

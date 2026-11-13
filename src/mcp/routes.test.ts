@@ -226,6 +226,8 @@ function setup(
       devUser: null,
       authEmailHeader: 'X-authentik-email',
       authNameHeader: 'X-authentik-name',
+      authMode: 'proxy',
+      authUsers: [],
     },
     artifacts,
     comments,
@@ -255,6 +257,7 @@ function setup(
       resolve: record('resolve'),
     },
     signer: { url: () => '', verify: () => false },
+    sessions: {} as Deps['sessions'],
   };
   const app = new Hono();
   app.route('/mcp', createMcpRoutes(deps));

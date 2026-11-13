@@ -31,6 +31,7 @@ import {
   initials,
   type Shell,
   searchBox,
+  signOutForm,
   type Theme,
   themeSwitch,
 } from './layout.ts';
@@ -324,6 +325,7 @@ export const PANEL_TABS: readonly PanelTab[] = ['versions', 'comments', 'share',
 export function artifactPage(opts: {
   user: string;
   name: string;
+  signOut?: boolean;
   theme: Theme;
   artifact: Artifact;
   version: Version;
@@ -437,7 +439,7 @@ ${panel}
 
 /** The artifact and compare pages' top bar: back, breadcrumbs, search and the account menu. */
 function viewerTop(
-  who: { user: string; name: string; theme: Theme },
+  who: { user: string; name: string; theme: Theme; signOut?: boolean },
   self: string,
   back: string,
   crumbs: Html,
@@ -448,7 +450,7 @@ function viewerTop(
 <span class="sp"></span>
 ${searchBox('', true)}
 <details class="menu"><summary class="av-btn" aria-label="Account and theme"><span class="av sm">${initials(who.name)}</span></summary>
-<div class="menu-pop right account"><div class="who-text"><span class="who-name">${who.name}</span><small>${who.user}</small></div>${themeSwitch(who.theme, self)}</div></details>
+<div class="menu-pop right account"><div class="who-text"><span class="who-name">${who.name}</span><small>${who.user}</small></div>${themeSwitch(who.theme, self)}${who.signOut ? signOutForm() : ''}</div></details>
 </header>`;
 }
 
@@ -769,6 +771,7 @@ function changesView(c: Comparison): Html {
 export function comparePage(opts: {
   user: string;
   name: string;
+  signOut?: boolean;
   theme: Theme;
   comparison: Comparison;
   versions: Version[];
@@ -910,6 +913,36 @@ ${opts.error ? html`<div class="notice error">${opts.error}</div>` : ''}
 <button class="btn primary" type="submit">${icon('plus')}Create token</button>
 </form>
 ${rows}`,
+  });
+}
+
+/**
+ * The built-in sign-in page: a message card with the form. It works without JavaScript. `email` is
+ * what the user typed before (escaped by the template); the password is never put back.
+ */
+export function loginPage(opts: {
+  theme: Theme;
+  email: string;
+  next: string;
+  error?: string;
+}): Html {
+  return htmlPage({
+    title: 'Sign in',
+    theme: opts.theme,
+    bodyClass: 'bare',
+    body: html`<main class="message login">
+<a class="brand" href="/"><span class="logo">${icon('lib')}</span>Agent Artifacts</a>
+<div class="message-card">
+<h1>Sign in</h1>
+${opts.error ? html`<div class="notice error" role="alert">${opts.error}</div>` : ''}
+<form method="post" action="/login" class="login-form">
+<input type="hidden" name="next" value="${opts.next}">
+<label class="field"><span>Email</span><input class="input" type="email" name="email" value="${opts.email}" autocomplete="username" required maxlength="254" autofocus></label>
+<label class="field"><span>Password</span><input class="input" type="password" name="password" autocomplete="current-password" required maxlength="1024"></label>
+<button class="btn primary wide" type="submit">Sign in</button>
+</form>
+</div>
+</main>`,
   });
 }
 

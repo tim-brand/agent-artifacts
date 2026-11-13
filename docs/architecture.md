@@ -6,7 +6,7 @@ This page is for people who want to understand or change the code: how the two h
 
 ```mermaid
 flowchart LR
-  B[Browser] -->|app host| P[Reverse proxy<br/>signs people in]
+  B[Browser] -->|app host| P[Reverse proxy<br/>HTTPS, and sign-in in proxy mode]
   A[Agent] -->|"/mcp, OAuth (token)"| P
   B -->|content host, no sign-in| P
   P --> S[One Node process<br/>src/server.ts]
@@ -19,9 +19,10 @@ There is no build step. Node 24 runs the TypeScript in `src/` directly, by remov
 | Path | What it holds |
 | --- | --- |
 | `src/server.ts`, `src/config.ts` | Startup and settings. |
+| `src/hash-password.ts` | The command that makes an `AUTH_USERS` entry. It imports only `src/core/passwords.ts`, so it runs in the image. |
 | `src/app.ts` | Sends each request to the app host or the content host by its `Host` header. |
 | `src/contracts.ts` | The service interfaces that the routes use. Change a seam here first. |
-| `src/core/` | SQLite and the stored files. `db.ts` holds the migrations; one file per service (artifacts, comments, share links, data, search, library, tokens, trash, OAuth). |
+| `src/core/` | SQLite and the stored files. `db.ts` holds the migrations; one file per service (artifacts, comments, share links, data, search, library, tokens, trash, OAuth, sessions) and `passwords.ts` for the password hashes. |
 | `src/mcp/` | The MCP server: stateless streamable HTTP with bearer-token sign-in. |
 | `src/oauth/` | The public OAuth endpoints and their rules. |
 | `src/ui/` | The web UI, rendered on the server with `hono/html`. Static files are in `src/ui/static/`. |
@@ -44,7 +45,7 @@ The split is the security boundary. Artifacts are written by agents and can hold
 1. `/healthz` answers `ok`.
 2. `/mcp` is the MCP server. It needs a bearer token: a personal access token (`aa_…`) or an OAuth access token issued for this endpoint. It never reads the identity headers.
 3. The OAuth routes answer the six public paths (`src/oauth/rules.ts`: `PUBLIC_OAUTH_PATHS`). They read no identity headers either.
-4. Everything else is the web UI (`src/ui/routes.ts`). The UI refuses the public paths itself with a 404, so it can never serve them by mistake. Then, in order: it reads the identity header (`AUTH_EMAIL_HEADER`, or `DEV_USER` in local development) and answers 401 "Not signed in" if there is none; it checks that every write has an `Origin` equal to `APP_ORIGIN`; and it limits form bodies to 64 KB. It adds the security headers (a Content-Security-Policy that allows only `'self'` and the content host for frames, `X-Frame-Options: DENY`, `Cache-Control: no-store`).
+4. Everything else is the web UI (`src/ui/routes.ts`). The UI refuses the public paths itself with a 404, so it can never serve them by mistake. Then, in order: it decides who is signed in (see [Where identity is trusted](#where-identity-is-trusted)) and answers 401 "Not signed in" if there is no one (in password mode, a page is redirected to `/login` instead); it checks that every write has an `Origin` equal to `APP_ORIGIN`; and it limits form bodies to 64 KB. It adds the security headers (a Content-Security-Policy that allows only `'self'` and the content host for frames, `X-Frame-Options: DENY`, `Cache-Control: no-store`).
 
 **Content host.** `/s/<exp>.<sig>/<id>/<version>/<path>` serves a file of a version. The link is signed with an HMAC-SHA256 of `id/version/exp` using `SIGNING_SECRET`, and checked in constant time; the app makes one when it renders a page, with a lifetime of one hour. `/p/<token>/…` serves a [public share link](sharing.md): the token is looked up by its hash, and the route is rate limited. `/_aa/bridge.js` is the one script the host adds (see below).
 
@@ -52,15 +53,26 @@ Every response from the content host carries a CSP `sandbox` (so even a page ope
 
 ## Where identity is trusted
 
-The identity headers are read in one place: `src/ui/`. `/mcp`, the OAuth endpoints and the content host never read them, because the proxy's sign-in is switched off on `/mcp` and the public OAuth paths, so a client could send any value there. The person's email is used for the author of comments, the answerer of asks, the user of an OAuth grant and the publisher of versions made in the UI. See [Deployment](deployment.md#what-the-reverse-proxy-must-do) for what the proxy must guarantee, and `AGENTS.md` for the rule.
+`AUTH_MODE` picks one of two ways to know who is signed in. One place decides it for both: the first middleware after the public-path check in `src/ui/routes.ts`, which sets the user, the display name and the viewer name for the rest of the request. Only `src/ui/` reads the identity headers and the session cookie. `/mcp`, the OAuth endpoints and the content host read neither, and the content host sets no cookie.
+
+- **Proxy mode** (the default). The user is the value of the `AUTH_EMAIL_HEADER` header, or `DEV_USER` in local development. The proxy's sign-in is switched off on `/mcp` and the public OAuth paths, so a client could send any value there; that is why nothing outside `src/ui/` reads the header. `/login` and `/logout` do not exist. A session cookie is ignored.
+- **Password mode** (`AUTH_MODE=password`). The user comes only from a valid session cookie. The identity headers are never read, on any route: a request that carries them and no session is not signed in. Without a session, a page redirects to `/login?next=…`, and a write or an `/api/` call gets 401. `/login`, `POST /logout` and `/static/` are the only UI paths that answer without a session. `/login` checks the password (`src/core/passwords.ts`) after two rate limits, and then makes a session.
+
+The person's email is used for the author of comments, the answerer of asks, the user of an OAuth grant and the publisher of versions made in the UI. See [Deployment](deployment.md#what-the-reverse-proxy-must-do) for what the proxy must guarantee in proxy mode, [Built-in sign-in](deployment.md#built-in-sign-in) for password mode, and `AGENTS.md` for the rules.
+
+### Passwords and sessions
+
+- A password is stored as a scrypt hash in `AUTH_USERS` (a setting, not the database). `src/core/passwords.ts` parses and checks the hash text and rejects parameters outside fixed bounds. It runs the async `scrypt`, never the sync one, with at most 4 checks at once and 16 waiting. An unknown email is checked against a dummy hash made at startup, so it takes as long as a wrong password.
+- A session is a row in the `sessions` table (`src/core/sessions.ts`): the SHA-256 of the token, the email, a SHA-256 of the account's hash text at sign-in (`credential`), and the creation, last use and expiry times. It lasts 30 days and slides: the row is written at most once an hour. It is valid only while its email is still an account and its `credential` still matches the hash text now configured, so removing a person or changing a password ends their sessions. The hourly clean-up deletes expired rows.
+- The cookie is `__Host-aa_session` on https and `aa_session` on a local http address: `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`, `Secure` on https.
 
 ## Storage
 
 Everything is in `DATA_DIR`: `artifacts.db` and `blobs/`.
 
 - **Blobs** are content-addressed. A file's bytes are stored once, under their SHA-256 (`blobs/ab/ab12…`), written to a temporary file and renamed into place, so a reader never sees a half-written file. Two versions, or two artifacts, with the same file share one blob. A version row lists its files with their path, size, type and hash; restoring a version copies those references and no bytes.
-- **The database** has one table per concept: `artifacts`, `versions`, `version_files`, `tokens`, `share_links`, `threads`, `comments`, `asks`, `artifact_data`, a full-text table `artifacts_fts`, and the OAuth tables `oauth_clients`, `oauth_grants`, `oauth_codes` and `oauth_tokens`. It runs in WAL mode with foreign keys on.
-- **Credentials** are stored only as SHA-256 hashes: personal access tokens, share link tokens, OAuth codes and tokens.
+- **The database** has one table per concept: `artifacts`, `versions`, `version_files`, `tokens`, `share_links`, `threads`, `comments`, `asks`, `artifact_data`, a full-text table `artifacts_fts`, the OAuth tables `oauth_clients`, `oauth_grants`, `oauth_codes` and `oauth_tokens`, and `sessions` (the built-in sign-in). It runs in WAL mode with foreign keys on.
+- **Credentials** are stored only as hashes: personal access tokens, share link tokens, OAuth codes and tokens and session tokens as SHA-256, and passwords as scrypt (in the settings, not the database).
 - **Deleting.** Deleting an artifact sets `deleted_at`. After 30 days an hourly job removes the row for good. Threads, comments, asks, share links and live page data reference the artifact with `ON DELETE CASCADE`, so they go with it. Then blobs that no version references and that are older than an hour are removed. The hour is a grace period for a publish that is still writing.
 - **Live page data** has one row per document, with a revision number per artifact. A delete leaves a tombstone so that polling pages see it; past 1,000 tombstones they are dropped and a page that polls from before that gets a full reset.
 

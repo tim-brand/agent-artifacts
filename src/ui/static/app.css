@@ -2055,6 +2055,40 @@ iframe.cmp-frame {
   margin-top: 0;
 }
 
+/* The built-in sign-in page: a message card with a form. */
+.message.login {
+  width: min(380px, calc(100% - 32px));
+}
+.login h1 {
+  margin-bottom: 16px;
+}
+.login .notice {
+  text-align: left;
+}
+.login-form {
+  text-align: left;
+}
+.login-form .field {
+  margin-bottom: 14px;
+}
+.login-form .input,
+.message-card .login-form .btn {
+  min-height: 36px;
+  height: 36px;
+}
+.message-card .login-form .btn {
+  margin-top: 4px;
+}
+
+/* The Sign out button: under the theme switch in the sidebar, and in the account menu. */
+.signout {
+  margin: 10px 0 0;
+}
+.account .signout {
+  padding-top: 10px;
+  border-top: 1px solid var(--divider);
+}
+
 /* Connections: a heading per kind of connection. */
 .h1row.section {
   margin: 28px 0 10px;

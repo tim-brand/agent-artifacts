@@ -480,6 +480,37 @@ export interface TokenService {
   verify(token: string): Promise<TokenInfo | null>;
 }
 
+/** A session of the built-in sign-in lasts this long after its last renewal. */
+export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** A session is renewed (and its row written) at most this often. */
+export const SESSION_TOUCH_MS = 60 * 60 * 1000;
+
+/** Sessions of the built-in sign-in (AUTH_MODE=password). Only ever used by src/ui/. */
+export interface SessionService {
+  /**
+   * A new session for the account. Returns the token, which is stored only as its SHA-256. `credential`
+   * is the SHA-256 of the account's password hash text. `now` is the clock, in ms.
+   */
+  create(
+    email: string,
+    credential: string,
+    now?: number,
+  ): Promise<{ token: string; maxAgeSeconds: number }>;
+  /**
+   * The signed-in email, or null. The session is valid only if it has not expired and
+   * `credentialOf(email)` still equals the credential stored at sign-in; `credentialOf` returns null
+   * for an email that is no longer an account. `renewed` is true when the expiry slid forward (the
+   * cookie should then be set again with `maxAgeSeconds`).
+   */
+  verify(
+    token: string,
+    credentialOf: (email: string) => string | null,
+    now?: number,
+  ): Promise<{ email: string; renewed: boolean; maxAgeSeconds: number } | null>;
+  /** Deletes the session. */
+  destroy(token: string): Promise<void>;
+}
+
 /** A client that registered itself (RFC 7591). Public: it has no secret. */
 export type OAuthClient = {
   id: string;
@@ -706,4 +737,5 @@ export type Deps = {
   oauth: OAuthService;
   shareLinks: ShareLinkService;
   signer: ContentSigner;
+  sessions: SessionService;
 };

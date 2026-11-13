@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ConfigError, loadConfig } from './config.ts';
+import { hashPassword } from './core/passwords.ts';
 
 const SECRET = 'k3Jx9vQ2mZpL0wTn7YhB4cRd8sFa1UeGoXi6NtVb5Mc=';
 const LOCAL = {
@@ -78,4 +79,171 @@ test('an empty PORT or DATA_DIR means the default', () => {
   assert.equal(config.port, 3000);
   assert.equal(config.dataDir, './data');
   refused({ ...PUBLIC, PORT: 'http' }, /PORT must be a port number/);
+});
+
+// ---- The built-in sign-in ----
+
+const HASH_A = await hashPassword('password of a', { logN: 14, p: 1 });
+const HASH_B = await hashPassword('password of b', { logN: 14, p: 1 });
+const PASSWORD = { ...PUBLIC, AUTH_MODE: 'password', AUTH_USERS: `a@example.com:${HASH_A}` };
+
+/** Refused, and the message names no hash. */
+const refusedWithoutHash = (env: NodeJS.ProcessEnv, pattern: RegExp) => {
+  assert.throws(
+    () => loadConfig(env),
+    (error: unknown) => {
+      assert.ok(error instanceof ConfigError);
+      assert.match(error.message, pattern);
+      for (const hash of [HASH_A, HASH_B]) {
+        assert.ok(!error.message.includes(hash), 'the message contains a hash');
+        assert.ok(!error.message.includes(hash.slice(10)), 'the message contains part of a hash');
+      }
+      assert.doesNotMatch(error.message, /scrypt\./);
+      return true;
+    },
+  );
+};
+
+test('AUTH_MODE defaults to proxy, and an empty value means the default', () => {
+  assert.equal(loadConfig(PUBLIC).authMode, 'proxy');
+  assert.equal(loadConfig({ ...PUBLIC, AUTH_MODE: '' }).authMode, 'proxy');
+  assert.equal(loadConfig({ ...PUBLIC, AUTH_MODE: 'proxy' }).authMode, 'proxy');
+  assert.deepEqual(loadConfig(PUBLIC).authUsers, []);
+  assert.equal(loadConfig(PASSWORD).authMode, 'password');
+});
+
+test('any other AUTH_MODE is refused', () => {
+  refused({ ...PUBLIC, AUTH_MODE: 'basic' }, /AUTH_MODE must be proxy or password/);
+  refused({ ...PUBLIC, AUTH_MODE: 'Password' }, /AUTH_MODE must be proxy or password/);
+  refused({ ...PUBLIC, AUTH_MODE: ' ' }, /AUTH_MODE/);
+});
+
+test('AUTH_USERS: entries are email:hash, separated by commas and white space, emails lower-cased', () => {
+  const config = loadConfig({
+    ...PASSWORD,
+    AUTH_USERS: `A@Example.com:${HASH_A},\n  b@example.com:${HASH_B}\n`,
+  });
+  assert.deepEqual(config.authUsers, [
+    { email: 'a@example.com', hash: HASH_A },
+    { email: 'b@example.com', hash: HASH_B },
+  ]);
+  const spaced = loadConfig({
+    ...PASSWORD,
+    AUTH_USERS: `a@example.com:${HASH_A} b@example.com:${HASH_B}`,
+  });
+  assert.equal(spaced.authUsers.length, 2);
+});
+
+test('AUTH_USERS: the email is everything before the first colon', () => {
+  const config = loadConfig({ ...PASSWORD, AUTH_USERS: `weird+tag@example.com:${HASH_A}` });
+  assert.equal(config.authUsers[0]?.email, 'weird+tag@example.com');
+});
+
+test('AUTH_USERS: a malformed entry, an invalid hash and a duplicate are refused, naming the entry but no hash', () => {
+  const ok = `a@example.com:${HASH_A}`;
+  // No colon: it may be a bare hash, so the entry itself is never printed.
+  refusedWithoutHash({ ...PASSWORD, AUTH_USERS: HASH_A }, /entry 1 has no ":"/);
+  // The sign-in form keeps 254 characters of an email, so a longer one could never sign in.
+  refusedWithoutHash(
+    { ...PASSWORD, AUTH_USERS: `${'a'.repeat(250)}@x.yz:${HASH_A}` },
+    /entry 1: the email is longer than 254 characters/,
+  );
+  assert.ok(loadConfig({ ...PASSWORD, AUTH_USERS: `${'a'.repeat(249)}@x.yz:${HASH_A}` }));
+  refusedWithoutHash({ ...PASSWORD, AUTH_USERS: `${ok} ${HASH_B}` }, /entry 2 has no ":"/);
+  refusedWithoutHash({ ...PASSWORD, AUTH_USERS: `:${HASH_A}` }, /entry 1 has no email/);
+  refusedWithoutHash(
+    { ...PASSWORD, AUTH_USERS: 'a@example.com:scrypt.14.8.1.AAAA.BBBB' },
+    /entry 1 \("a@example.com"\).*not valid/,
+  );
+  refusedWithoutHash({ ...PASSWORD, AUTH_USERS: 'a@example.com:' }, /entry 1.*not valid/);
+  refusedWithoutHash(
+    { ...PASSWORD, AUTH_USERS: `a@example.com:$2a$14$${'x'.repeat(53)}` },
+    /not valid/,
+  );
+  // The hash cannot contain a colon.
+  refusedWithoutHash({ ...PASSWORD, AUTH_USERS: `a@example.com:${HASH_A}:more` }, /not valid/);
+  // The same email twice, also when only the case differs.
+  refusedWithoutHash(
+    { ...PASSWORD, AUTH_USERS: `${ok} A@EXAMPLE.com:${HASH_B}` },
+    /entry 2 \("a@example.com"\).*twice/,
+  );
+  // The hash first and the email second: the "email" is a hash, so it is not printed.
+  refusedWithoutHash({ ...PASSWORD, AUTH_USERS: `${HASH_A}:a@example.com` }, /entry 1/);
+  // A hash with an out-of-bounds cost is not valid.
+  const [, , , , salt, key] = HASH_A.split('.');
+  refusedWithoutHash(
+    { ...PASSWORD, AUTH_USERS: `a@example.com:scrypt.30.8.1.${salt}.${key}` },
+    /not valid/,
+  );
+});
+
+test('AUTH_MODE=password needs at least one account', () => {
+  refused({ ...PUBLIC, AUTH_MODE: 'password' }, /AUTH_USERS holds no account/);
+  refused({ ...PUBLIC, AUTH_MODE: 'password', AUTH_USERS: '' }, /AUTH_USERS holds no account/);
+  refused({ ...PUBLIC, AUTH_MODE: 'password', AUTH_USERS: ' \n ,' }, /AUTH_USERS holds no account/);
+});
+
+test('AUTH_MODE=password refuses DEV_USER, also on localhost', () => {
+  refused({ ...PASSWORD, DEV_USER: 'dev@example.com' }, /DEV_USER.*password/);
+  refused(
+    {
+      ...LOCAL,
+      AUTH_MODE: 'password',
+      AUTH_USERS: PASSWORD.AUTH_USERS,
+      DEV_USER: 'dev@example.com',
+    },
+    /DEV_USER/,
+  );
+});
+
+test('AUTH_MODE=password needs an https APP_ORIGIN, except on localhost', () => {
+  refused({ ...PASSWORD, APP_ORIGIN: 'http://artifacts.example.com' }, /APP_ORIGIN must be https/);
+  refused(
+    { ...PASSWORD, APP_ORIGIN: 'http://localhost.example.com:3000' },
+    /APP_ORIGIN must be https/,
+  );
+  for (const app of [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://[::1]:3000',
+    'http://app.localhost:3000',
+    'https://artifacts.example.com',
+  ]) {
+    assert.ok(
+      loadConfig({
+        ...PASSWORD,
+        APP_ORIGIN: app,
+        CONTENT_ORIGIN: 'https://artifacts-content.example.com',
+      }),
+      app,
+    );
+  }
+  // The exception does not depend on NODE_ENV: the Docker image sets production.
+  const local = { ...LOCAL, AUTH_MODE: 'password', AUTH_USERS: PASSWORD.AUTH_USERS };
+  assert.equal(loadConfig({ ...local, NODE_ENV: 'production' }).authMode, 'password');
+});
+
+test('AUTH_USERS without AUTH_MODE=password is refused, so a typo cannot leave the wrong mode on', () => {
+  const users = `a@example.com:${HASH_A}`;
+  refusedWithoutHash(
+    { ...PUBLIC, AUTH_USERS: users },
+    /AUTH_USERS is set, but AUTH_MODE is not password/,
+  );
+  refusedWithoutHash(
+    { ...PUBLIC, AUTH_MODE: 'proxy', AUTH_USERS: users },
+    /AUTH_USERS is set, but AUTH_MODE is not password/,
+  );
+  refused({ ...PUBLIC, AUTH_MODE: '', AUTH_USERS: users }, /AUTH_USERS is set/);
+  // A blank value is not set.
+  assert.equal(loadConfig({ ...PUBLIC, AUTH_USERS: '' }).authMode, 'proxy');
+  assert.equal(loadConfig({ ...PUBLIC, AUTH_USERS: '  ' }).authMode, 'proxy');
+});
+
+test('in password mode the identity header settings are still validated, and DEV_USER stays refused in proxy mode as before', () => {
+  refused(
+    { ...PASSWORD, AUTH_EMAIL_HEADER: 'X Email' },
+    /AUTH_EMAIL_HEADER must be an HTTP header/,
+  );
+  assert.ok(loadConfig({ ...PASSWORD, AUTH_EMAIL_HEADER: 'X-Email' }));
+  refused({ ...PUBLIC, DEV_USER: 'dev@example.com' }, /DEV_USER/);
 });

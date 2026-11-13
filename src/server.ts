@@ -20,6 +20,13 @@ if (config.devUser) {
   );
 }
 
+if (config.authMode === 'password') {
+  // The number only: no emails, no hashes.
+  console.log(
+    `agent-artifacts: built-in sign-in, ${config.authUsers.length} account(s) configured`,
+  );
+}
+
 const core = createCore(config);
 const app = createApp({ config, ...core });
 const stopPurge = schedulePurge(() => core.purge());

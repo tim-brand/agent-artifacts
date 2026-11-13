@@ -169,6 +169,8 @@ const deps = {
     devUser: null,
     authEmailHeader: 'X-authentik-email',
     authNameHeader: 'X-authentik-name',
+    authMode: 'proxy',
+    authUsers: [],
   },
   artifacts,
   signer,
@@ -177,6 +179,7 @@ const deps = {
   shareLinks: {} as Deps['shareLinks'],
   comments: {} as Deps['comments'],
   data: {} as Deps['data'],
+  sessions: {} as Deps['sessions'],
 } satisfies Deps;
 
 const app = createContentRoutes(deps);

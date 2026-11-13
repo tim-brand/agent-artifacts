@@ -1,3 +1,12 @@
+/**
+ * The client address for a rate limit: the first entry of X-Forwarded-For, which the reverse proxy
+ * sets. Without it, everyone shares one bucket. The value is a limiter key and comes from the
+ * request, so it is cut to the length of the longest address: a client must not choose how much
+ * memory a key takes.
+ */
+export const clientAddress = (forwardedFor: string | undefined): string =>
+  forwardedFor?.split(',')[0]?.trim().slice(0, 64) || 'unknown';
+
 /** In-memory token bucket per key: `capacity` requests at once, refilled at `perMinute`. */
 export function createRateLimiter(opts: { capacity: number; perMinute: number; maxKeys?: number }) {
   const { capacity, perMinute, maxKeys = 10_000 } = opts;
