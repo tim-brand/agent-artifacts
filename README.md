@@ -73,7 +73,7 @@ It asks for a password and prints `you@example.com:scrypt.…`. Paste that after
 
 In both ways: set a real `SIGNING_SECRET` (`openssl rand -base64 32`), use HTTPS, run one replica, and back up the data directory.
 
-For the quickest real setup, use [`examples/compose/`](examples/compose/): Docker Compose with Caddy and the built-in sign-in, for one person or a few people without an identity provider. It serves `http://localhost:8080` for a local trial. The full, checkable list of proxy rules, the header names of common sign-in products, backups, upgrades and the image are in [Deploying Agent Artifacts](docs/deployment.md). The image is `ghcr.io/tim-brand/agent-artifacts:latest` (`linux/amd64`), or build it with `docker build .`.
+For the quickest real setup, use [`examples/compose/`](examples/compose/): Docker Compose with Caddy and the built-in sign-in, for one person or a few people without an identity provider. It serves `http://localhost:8080` for a local trial. The full, checkable list of proxy rules, the header names of common sign-in products, backups, upgrades and the image are in [Deploying Agent Artifacts](docs/deployment.md). The image is `ghcr.io/tim-brand/agent-artifacts:latest` (`linux/amd64` and `linux/arm64`), or build it with `docker build .`.
 
 ## Settings
 

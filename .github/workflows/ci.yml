@@ -29,8 +29,22 @@ jobs:
 
       - run: pnpm test
 
+  # The image is published for two platforms (image.yml). Each one is built and checked here on a
+  # runner of its own architecture, so nothing in these checks runs under emulation. The amd64 leg
+  # keeps the name `image`, which the branch rules require.
   image:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: image
+            arch: amd64
+            runner: ubuntu-latest
+          - name: image-arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     env:
       SIGNING_SECRET: ci-only-signing-secret-0123456789abcdefg
     steps:
@@ -72,10 +86,20 @@ jobs:
         with:
           context: .
           load: true
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.arch }}
           tags: agent-artifacts:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # One cache per platform: with a shared one, each leg would overwrite the other's.
+          # image.yml reads both.
+          cache-from: type=gha,scope=ci-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.arch }}
+
+      - name: The image is for this architecture
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          built="$(docker image inspect agent-artifacts:ci --format '{{.Architecture}}')"
+          echo "Image: $built, runner: $(uname -m)"
+          test "$built" = "$ARCH"
 
       - name: No data, env files, tests or root user in the image
         run: |

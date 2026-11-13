@@ -7,8 +7,8 @@ services:
   app:
     # Build the image from this repository (the folder two levels up).
     build: ../..
-    # Or use a released image instead (linux/amd64). The built-in sign-in needs release 0.2.0 or
-    # later; see the releases on GitHub for the versions:
+    # Or use a released image instead (linux/amd64 and linux/arm64; up to 0.3.0 amd64 only). The
+    # built-in sign-in needs release 0.2.0 or later; see the releases on GitHub for the versions:
     # image: ghcr.io/tim-brand/agent-artifacts:0.3.0
     restart: unless-stopped
     environment:
