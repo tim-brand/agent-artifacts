@@ -33,7 +33,7 @@ docker pull ghcr.io/tim-brand/agent-artifacts:0.2.0
 
 Each [release](https://github.com/tim-brand/agent-artifacts/releases) has a tag like `0.2.0` that never changes. The built-in sign-in needs release 0.2.0 or later. `latest` is the newest commit on `master`, released or not; use it only if you want to follow the development.
 
-The image runs as the user `node`, sets `NODE_ENV=production`, listens on port 3000, and writes only to `/data`. Mount a persistent volume there. A directory you mount from the host must be writable by the `node` user (uid 1000). A minimal run command looks like this; the proxy still has to be set up as described below, and you still need `AUTH_MODE`, with `AUTH_USERS` for the built-in sign-in:
+The image runs as the user `node`, sets `NODE_ENV=production`, listens on port 3000, and writes only to `/data`. Mount a persistent volume there. A directory you mount from the host must be writable by the `node` user (uid 1000). A minimal run command looks like this. It does not start as it is: add the settings for how people sign in, either `AUTH_EMAIL_HEADER` for a sign-in proxy or `AUTH_MODE=password` with `AUTH_USERS` for the built-in sign-in. The proxy still has to be set up as described below:
 
 ```bash
 docker run -d --name agent-artifacts \
@@ -64,8 +64,8 @@ These are environment variables. `pnpm dev` also reads a `.env` file; the image 
 | `DATA_DIR` | no | Where the database and files are kept. Default `./data`, and `/data` in the image. |
 | `AUTH_MODE` | no | `proxy` (the default) or `password`. An empty value means the default. Any other value is refused. |
 | `AUTH_USERS` | in `password` mode | The accounts of the built-in sign-in: `email:hash` entries, separated by commas and/or white space (new lines too). Make an entry with `node src/hash-password.ts you@example.com`. At least one is required in `password` mode; the app refuses to start if it is set in `proxy` mode. See [Built-in sign-in](#built-in-sign-in). |
-| `AUTH_EMAIL_HEADER` | no | Proxy mode: the request header in which the proxy sends the signed-in user's email. Default `X-authentik-email`. Letters, digits and `-` only. Not used in `password` mode. |
-| `AUTH_NAME_HEADER` | no | Proxy mode: the request header for the user's display name. Default `X-authentik-name`. Optional in practice: without it the email is shown. Not used in `password` mode. |
+| `AUTH_EMAIL_HEADER` | in `proxy` mode | The request header in which the proxy sends the signed-in user's email. There is no default, because every proxy names it differently: see [Header names that sign-in proxies send](#header-names-that-sign-in-proxies-send). Letters, digits and `-` only. Only local development with `DEV_USER` works without it. Not used in `password` mode. |
+| `AUTH_NAME_HEADER` | no | Proxy mode: the request header for the user's display name. There is no default: without it the email is shown. Not used in `password` mode. |
 | `NODE_ENV` | no | `production` turns local development off. The image sets it. |
 | `DEV_USER` | no | Local development only, proxy mode only: the user everyone is signed in as when no identity header is present. The app refuses to start with it outside local development, and with `AUTH_MODE=password`. |
 
@@ -192,11 +192,11 @@ In proxy mode the app trusts the identity header completely. These rules keep th
 
 ### Header names that sign-in proxies send
 
-Put the header your proxy sends into `AUTH_EMAIL_HEADER`, and the one with the display name, if there is one, into `AUTH_NAME_HEADER`. If a product has no display name header, leave `AUTH_NAME_HEADER` alone: the app falls back to the email. Header names are case-insensitive.
+Put the header your proxy sends into `AUTH_EMAIL_HEADER`, and the one with the display name, if there is one, into `AUTH_NAME_HEADER`. The app has no default for either. Without `AUTH_EMAIL_HEADER` it refuses to start in proxy mode. If a product has no display name header, leave `AUTH_NAME_HEADER` unset: the app shows the email instead. Header names are case-insensitive.
 
 | Proxy or product | `AUTH_EMAIL_HEADER` | `AUTH_NAME_HEADER` | Checked on |
 | --- | --- | --- | --- |
-| Authentik (the defaults) | `X-authentik-email` | `X-authentik-name` | [Proxy provider](https://docs.goauthentik.io/add-secure-apps/providers/proxy/) |
+| Authentik | `X-authentik-email` | `X-authentik-name` | [Proxy provider](https://docs.goauthentik.io/add-secure-apps/providers/proxy/) |
 | oauth2-proxy | `X-Forwarded-Email` | none (it sends the username in `X-Forwarded-User` and `X-Forwarded-Preferred-Username`) | [Configuration overview](https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview/) (`--pass-user-headers`) |
 | Authelia | `Remote-Email` | `Remote-Name` | [Trusted Header SSO](https://www.authelia.com/integration/trusted-header-sso/introduction/) |
 | Tailscale Serve | `Tailscale-User-Login` (the login name, usually an email) | `Tailscale-User-Name` | [Tailscale Serve](https://tailscale.com/kb/1312/serve) |
@@ -215,7 +215,7 @@ Notes:
 | What you see | Why |
 | --- | --- |
 | A plain-text 404 that starts with `Unknown host.` | The `Host` header is neither the host of `APP_ORIGIN` nor of `CONTENT_ORIGIN`. Check the two settings (the port counts), and check that the proxy passes `Host` through. This is also what you get if you change `PORT` for a local trial and not the two origins. `/healthz` is the only path that works on any host. |
-| A page titled "Not signed in" that says: "This app has no sign-in of its own. A sign-in proxy in front of it must send the signed-in user's email in the `X-authentik-email` request header, and that header is missing." | Proxy mode: the identity header did not arrive. The page names the header the app expects (`AUTH_EMAIL_HEADER`). Check that the proxy sets it, and that the name matches. If you wanted the built-in sign-in, set `AUTH_MODE=password`. |
+| A page titled "Not signed in" that says: "This app has no sign-in of its own. A sign-in proxy in front of it must send the signed-in user's email in the `X-Forwarded-Email` request header, and that header is missing." | Proxy mode: the identity header did not arrive. The page names the header the app expects (`AUTH_EMAIL_HEADER`). Check that the proxy sets it, and that the name matches. If you wanted the built-in sign-in, set `AUTH_MODE=password`. |
 | A page titled "Not signed in" that says "Sign in first." (status 401) | Built-in sign-in: a write or an `/api/` call came without a valid session. The session ended or expired. Sign in again. |
 | You sign in, and the login page comes back | The browser did not keep the cookie. Check that `APP_ORIGIN` is exactly the address in the browser, and that the proxy serves HTTPS: the cookie is `Secure`. |
 | "Wrong email or password." for the right password | Check the email (any case works) and the password (exactly as typed, with no extra space). The accounts are read at startup: restart after you change `AUTH_USERS`. |
@@ -234,6 +234,7 @@ Notes:
 | `APP_ORIGIN must be an origin such as https://artifacts.example.com` (same for `CONTENT_ORIGIN`) | Give a full origin with scheme. |
 | `AUTH_EMAIL_HEADER must be an HTTP header name (letters, digits and - only)` (same for `AUTH_NAME_HEADER`) | Use a plain header name. |
 | `AUTH_MODE must be proxy or password` | Use one of the two, or leave it empty. |
+| `AUTH_MODE is proxy (the default), but AUTH_EMAIL_HEADER is not set. …` | Set `AUTH_EMAIL_HEADER` to the header your sign-in proxy sends (see [Header names that sign-in proxies send](#header-names-that-sign-in-proxies-send)). If you wanted the built-in sign-in, set `AUTH_MODE=password`. |
 | `AUTH_MODE is password, but AUTH_USERS holds no account. Make an entry with: node src/hash-password.ts you@example.com` | Set `AUTH_USERS`. |
 | `AUTH_USERS is set, but AUTH_MODE is not password. …` | Set `AUTH_MODE=password`, or remove `AUTH_USERS`. |
 | `AUTH_USERS entry 2 has no ":"`, `entry 2 ("a@example.com"): the password hash is not valid`, `… this email is listed twice` | Fix that entry. The number is its position in `AUTH_USERS`. Make the entry with `node src/hash-password.ts you@example.com`. |
@@ -279,7 +280,7 @@ To restore, stop the app, put `artifacts.db` and `blobs/` in an empty `DATA_DIR`
 
 ## Upgrading
 
-Pull or build the new image and restart. The database schema is updated at startup: the app runs any migration steps it has not yet applied, each in its own transaction, in order. There is no separate command.
+Pull or build the new image and restart. Read the release notes first: a release can ask for a change in the settings. `0.3.0` does: proxy mode now needs `AUTH_EMAIL_HEADER`, where older versions fell back to `X-authentik-email` and `X-authentik-name`. The database schema is updated at startup: the app runs any migration steps it has not yet applied, each in its own transaction, in order. There is no separate command.
 
 - Take a backup first. Migrations on real data are the riskiest part of an upgrade.
 - Do not go back to an older version after a newer one has opened the database. The older code does not know the newer schema, and does not stop.

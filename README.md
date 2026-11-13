@@ -64,7 +64,7 @@ node src/hash-password.ts you@example.com
 
 It asks for a password and prints `you@example.com:scrypt.…`. Paste that after `AUTH_USERS=`. In the Docker image: `docker run --rm -it ghcr.io/tim-brand/agent-artifacts:0.2.0 node src/hash-password.ts you@example.com`. The proxy only has to serve HTTPS, pass `Host` through and set `X-Forwarded-For`. See [Built-in sign-in](docs/deployment.md#built-in-sign-in).
 
-**Sign-in proxy** (`AUTH_MODE=proxy`, the default), for an identity provider. The app trusts the identity that the proxy sends in a request header (by default `X-authentik-email`; Authentik is just one example, and any proxy works). The rules that keep this safe:
+**Sign-in proxy** (`AUTH_MODE=proxy`, the default), for an identity provider. The app trusts the identity that the proxy sends in a request header. You name that header in `AUTH_EMAIL_HEADER`: every proxy has its own (see [Header names that sign-in proxies send](docs/deployment.md#header-names-that-sign-in-proxies-send)), so there is no default, and the app refuses to start without it. The rules that keep this safe:
 
 - Never expose the app's port directly. Only the proxy may reach it.
 - The proxy sets the identity header from the signed-in user, and removes any such header that a client sent, on every path and on the content host.
@@ -88,8 +88,8 @@ The app reads these environment variables. `pnpm dev` also reads `.env`.
 | `DATA_DIR`          | no                 | The SQLite database and the artifact files. Default `./data`, and `/data` in the image.                                                                                                                     |
 | `AUTH_MODE`         | no                 | `proxy` (the default): a sign-in proxy tells the app who is signed in. `password`: the built-in sign-in. Any other value is refused.                                                                        |
 | `AUTH_USERS`        | in `password` mode | The accounts of the built-in sign-in: `email:hash` entries, separated by commas or white space. Make an entry with `node src/hash-password.ts you@example.com`. Refused when `AUTH_MODE` is not `password`. |
-| `AUTH_EMAIL_HEADER` | no                 | Proxy mode: the request header where your sign-in proxy sends the user's email. Default `X-authentik-email`. Letters, digits and `-` only. Not used in `password` mode.                                     |
-| `AUTH_NAME_HEADER`  | no                 | Proxy mode: the header for the user's display name. Default `X-authentik-name`. Not used in `password` mode.                                                                                                |
+| `AUTH_EMAIL_HEADER` | in `proxy` mode    | The request header where your sign-in proxy sends the user's email, for example `X-Forwarded-Email`. No default. Letters, digits and `-` only. Not used in `password` mode.                                 |
+| `AUTH_NAME_HEADER`  | no                 | Proxy mode: the header for the user's display name. No default; without it the email is shown. Not used in `password` mode.                                                                                 |
 | `DEV_USER`          | no                 | Local development only, proxy mode only: the signed-in user when no identity header is sent. The app refuses to start with it outside local development, and with `AUTH_MODE=password`.                     |
 | `NODE_ENV`          | no                 | `production` turns local development off. The Docker image sets it.                                                                                                                                         |
 

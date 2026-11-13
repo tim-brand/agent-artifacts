@@ -223,16 +223,18 @@ export function createUiRoutes(deps: Deps, options: UiOptions = {}): Hono {
       }
       return message(c, 401, 'Not signed in', 'Sign in first.');
     }
-    const user = c.req.header(config.authEmailHeader) || config.devUser;
+    // loadConfig makes sure that the email header or DEV_USER is set.
+    const emailHeader = config.authEmailHeader;
+    const user = (emailHeader && c.req.header(emailHeader)) || config.devUser;
     if (!user) {
       return message(
         c,
         401,
         'Not signed in',
-        `This app has no sign-in of its own. A sign-in proxy in front of it must send the signed-in user's email in the ${config.authEmailHeader} request header, and that header is missing.`,
+        `This app has no sign-in of its own. A sign-in proxy in front of it must send the signed-in user's email in the ${emailHeader ?? 'AUTH_EMAIL_HEADER'} request header, and that header is missing.`,
       );
     }
-    const headerName = c.req.header(config.authNameHeader);
+    const headerName = config.authNameHeader ? c.req.header(config.authNameHeader) : undefined;
     c.set('user', user);
     c.set('name', headerName || user);
     c.set('viewerName', headerName ?? '');
