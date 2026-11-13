@@ -7,9 +7,9 @@ services:
   app:
     # Build the image from this repository (the folder two levels up).
     build: ../..
-    # Or use a published image instead (linux/amd64). The built-in sign-in is newer than release
-    # 0.1.0, so use latest or a later release:
-    # image: ghcr.io/tim-brand/agent-artifacts:latest
+    # Or use a released image instead (linux/amd64). The built-in sign-in needs release 0.2.0 or
+    # later; see the releases on GitHub for the versions:
+    # image: ghcr.io/tim-brand/agent-artifacts:0.2.0
     restart: unless-stopped
     environment:
       APP_ORIGIN: ${APP_ORIGIN:?set APP_ORIGIN in .env}
