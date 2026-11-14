@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping. This is a small project, so the process is short.
+Thanks for helping. This is a small project, so the process is short. Everyone who takes part is expected to follow the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Set up
 
