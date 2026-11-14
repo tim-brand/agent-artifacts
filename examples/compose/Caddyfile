@@ -9,10 +9,10 @@
 # Caddy passes the Host header on unchanged, which the app needs to tell the two sites apart.
 # Caddy sets no limit on the size of a request body, so large publishes to /mcp go through.
 #
-# X-Forwarded-For: the app rate-limits sign-in attempts by the first entry. Caddy replaces a value
-# the client sent with the real client address, unless the client is in `trusted_proxies`. This
-# file does not set `trusted_proxies`. Leave it that way, unless another proxy (a CDN) sits in
-# front of Caddy.
+# X-Forwarded-For: the app rate-limits sign-in attempts by the last entry (TRUSTED_PROXIES=1, the
+# default). Caddy replaces a value the client sent with the real client address, unless the client
+# is in `trusted_proxies`. This file does not set `trusted_proxies`. Leave it that way, unless
+# another proxy (a CDN) sits in front of Caddy; then also set TRUSTED_PROXIES=2 for the app.
 
 {$APP_ORIGIN:http://localhost:8080} {
 	reverse_proxy app:3000

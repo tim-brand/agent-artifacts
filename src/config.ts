@@ -12,6 +12,11 @@ export type Config = {
   /** The accounts, in password mode only; empty in proxy mode. Contains password hashes: never log it. */
   authUsers: AuthUser[];
   port: number;
+  /**
+   * How many reverse proxies sit in front of the app and append to X-Forwarded-For. The rate limits
+   * take the client address that many entries from the right. Default 1.
+   */
+  trustedProxies: number;
   /** SQLite file and artifact files live under here. */
   dataDir: string;
   /** The public origin of the app host, e.g. https://artifacts.example.com */
@@ -124,6 +129,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new ConfigError('PORT must be a port number');
   }
+  const trustedProxies = Number(env.TRUSTED_PROXIES || 1);
+  if (!Number.isInteger(trustedProxies) || trustedProxies < 1 || trustedProxies > 32) {
+    throw new ConfigError(
+      'TRUSTED_PROXIES must be a whole number from 1 to 32: the number of reverse proxies in front of the app',
+    );
+  }
 
   const mode = env.AUTH_MODE || 'proxy';
   if (mode !== 'proxy' && mode !== 'password') {
@@ -135,6 +146,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     authMode: mode,
     authUsers: mode === 'password' ? parseUsers(usersText) : [],
     port,
+    trustedProxies,
     dataDir: env.DATA_DIR || './data',
     appOrigin: origin(env, 'APP_ORIGIN'),
     contentOrigin: origin(env, 'CONTENT_ORIGIN'),

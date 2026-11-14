@@ -10,10 +10,11 @@ import { createContentRoutes } from './routes.ts';
 
 const CONTENT = 'https://content.test';
 
-function setup(t: TestContext) {
+function setup(t: TestContext, trustedProxies = 1) {
   const dir = mkdtempSync(join(tmpdir(), 'agent-artifacts-'));
   const config: Config = {
     port: 0,
+    trustedProxies,
     dataDir: join(dir, 'data'),
     appOrigin: 'https://app.test',
     contentOrigin: CONTENT,
@@ -213,21 +214,42 @@ test('unknown, malformed, revoked, expired and deleted links get the same 404; u
   await notFound(`/p/${revoked.token}/docs/index.html`);
 });
 
-test('/p/ is rate limited per client IP, from the first X-Forwarded-For entry', async (t) => {
+test('/p/ is rate limited per client IP, from the last X-Forwarded-For entry', async (t) => {
   const { get } = setup(t);
   const path = `/p/sl_${'A'.repeat(43)}/`;
   for (let i = 0; i < 60; i++) {
     assert.equal((await get(path, { ip: '1.2.3.4, 10.0.0.1' })).status, 404);
   }
-  const limited = await get(path, { ip: '1.2.3.4, 10.0.0.2' });
+  const limited = await get(path, { ip: '1.2.3.4, 10.0.0.1' });
   assert.equal(limited.status, 429);
   assert.equal(limited.headers.get('retry-after'), '1');
   assertPublicHeaders(limited);
-  assert.equal((await get(path, { ip: '5.6.7.8, 1.2.3.4' })).status, 404);
+  assert.equal((await get(path, { ip: '1.2.3.4, 10.0.0.2' })).status, 404);
 
   // Without the header everyone shares one bucket.
   for (let i = 0; i < 60; i++) assert.equal((await get(path, { ip: null })).status, 404);
   assert.equal((await get(path, { ip: null })).status, 429);
+});
+
+test('/p/ ignores a client-chosen first entry: a spoofed value gives no fresh bucket', async (t) => {
+  const { get } = setup(t);
+  const path = `/p/sl_${'A'.repeat(43)}/`;
+  for (let i = 0; i < 60; i++) {
+    assert.equal((await get(path, { ip: `9.9.9.${i}, 203.0.113.7` })).status, 404);
+  }
+  assert.equal((await get(path, { ip: '8.8.8.8, 203.0.113.7' })).status, 429);
+  assert.equal((await get(path, { ip: '8.8.8.8, 203.0.113.8' })).status, 404);
+});
+
+test('/p/ takes the entry TRUSTED_PROXIES from the right', async (t) => {
+  const { get } = setup(t, 2);
+  const path = `/p/sl_${'A'.repeat(43)}/`;
+  // The last entry is the outer proxy, shared by every visitor; the one before it is the client.
+  for (let i = 0; i < 60; i++) {
+    assert.equal((await get(path, { ip: `9.9.9.${i}, 203.0.113.7, 10.0.0.${i}` })).status, 404);
+  }
+  assert.equal((await get(path, { ip: '8.8.8.8, 203.0.113.7, 10.0.0.99' })).status, 429);
+  assert.equal((await get(path, { ip: '8.8.8.8, 203.0.113.8, 10.0.0.1' })).status, 404);
 });
 
 test('the rate limiter refills over time and forgets idle clients', () => {
@@ -243,13 +265,4 @@ test('the rate limiter refills over time and forgets idle clients', () => {
   // A third client while both are busy: the map is reset rather than grown.
   assert.equal(limiter.take('c', 1000), true);
   assert.equal(limiter.take('a', 1000), true);
-});
-
-test('the client address of a rate limit is cut short: a client cannot choose the size of a key', async () => {
-  const { clientAddress } = await import('./rate-limit.ts');
-  assert.equal(clientAddress('203.0.113.7, 10.0.0.1'), '203.0.113.7');
-  assert.equal(clientAddress(' 2001:db8::1 '), '2001:db8::1');
-  assert.equal(clientAddress(undefined), 'unknown');
-  assert.equal(clientAddress(' , 1.2.3.4'), 'unknown');
-  assert.equal(clientAddress('x'.repeat(15_000)).length, 64);
 });

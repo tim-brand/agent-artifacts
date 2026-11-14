@@ -22,7 +22,7 @@ Responses under `/p/` differ from the signed `/s/` links that the app itself use
 - `X-Robots-Tag: noindex, nofollow`.
 - `Cache-Control: no-store` for links that follow the latest version. Links pinned to a version may be cached for 5 minutes.
 - An unknown, revoked or expired token, or one whose artifact is deleted, gets the same 404, so a token cannot be probed. A deleted artifact's links work again if it is restored from the trash.
-- They are rate limited to 60 requests a minute per client IP, in memory. The client IP is the first entry of the `X-Forwarded-For` header, which the reverse proxy must set; see [Deployment](deployment.md#what-the-reverse-proxy-must-do).
+- They are rate limited to 60 requests a minute per client IP, in memory. The client IP is the entry of the `X-Forwarded-For` header that is `TRUSTED_PROXIES` from the right (default 1: the last entry, added by your reverse proxy); see [Deployment](deployment.md#what-the-reverse-proxy-must-do).
 - Public links never get the comment bridge. An HTML page that declares [live page](live-pages.md) capabilities gets a version of the runtime script that cannot talk to anything.
 
 Like all artifact content, a public page runs on the content host in a sandbox, away from the app. See [Architecture](architecture.md#two-hosts).

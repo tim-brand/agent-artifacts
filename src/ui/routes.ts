@@ -279,7 +279,7 @@ export function createUiRoutes(deps: Deps, options: UiOptions = {}): Hono {
         c.html(loginPage({ theme: theme(c), email, next, error }), status);
 
       // Both limits are checked before any password is, so a flood costs no scrypt work.
-      const address = clientAddress(c.req.header('x-forwarded-for'));
+      const address = clientAddress(c.req.header('x-forwarded-for'), config.trustedProxies);
       if (!addressLimit.take(address) || !accountLimit.take(email)) return again(429, TOO_MANY);
 
       const result = await (checker as NonNullable<typeof checker>).check(email, password);

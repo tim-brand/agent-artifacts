@@ -28,8 +28,6 @@ function oauthError(
   return c.json({ error: code, error_description: description }, status ?? STATUS[code] ?? 400);
 }
 
-const clientIp = (c: Context) => clientAddress(c.req.header('x-forwarded-for'));
-
 async function readBody(c: Context): Promise<string | null> {
   if (Number(c.req.header('content-length') ?? 0) > MAX_BODY_BYTES) return null;
   const reader = c.req.raw.body?.getReader();
@@ -57,6 +55,8 @@ async function readBody(c: Context): Promise<string | null> {
  */
 export function createOAuthRoutes(deps: OAuthDeps): Hono {
   const { config, oauth } = deps;
+  const clientIp = (c: Context) =>
+    clientAddress(c.req.header('x-forwarded-for'), config.trustedProxies);
   const app = new Hono();
   const issuer = config.appOrigin;
   const resource = mcpResource(config.appOrigin);

@@ -11,6 +11,7 @@ function setup(t: TestContext) {
   const dir = mkdtempSync(join(tmpdir(), 'agent-artifacts-app-'));
   const config: Config = {
     port: 0,
+    trustedProxies: 1,
     dataDir: dir,
     appOrigin: 'https://app.test',
     contentOrigin: 'https://content.test',

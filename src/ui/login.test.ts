@@ -34,6 +34,7 @@ function setup(t: TestContext, options: Options = {}) {
   const password = (options.mode ?? 'password') === 'password';
   const config: Config = {
     port: 0,
+    trustedProxies: 1,
     dataDir: dir,
     appOrigin: origins.app,
     contentOrigin: origins.content,
@@ -726,6 +727,22 @@ describe('rate limits', () => {
       { address: '203.0.113.6' },
     );
     assert.equal(other.status, 303);
+  });
+
+  it('ignores a spoofed first X-Forwarded-For entry: it gives no fresh address bucket', async (t) => {
+    const { login } = setup(t);
+    for (let i = 0; i < 10; i++) {
+      const res = await login(
+        { email: `user${i}@example.com`, password: 'nope', next: '/' },
+        { address: `9.9.9.${i}, 203.0.113.5` },
+      );
+      assert.equal(res.status, 401, `attempt ${i + 1}`);
+    }
+    const limited = await login(
+      { email: 'a@example.com', password: 'password of a', next: '/' },
+      { address: '8.8.8.8, 203.0.113.5' },
+    );
+    assert.equal(limited.status, 429);
   });
 
   it('limits attempts per account, whatever the address, and for unknown emails too', async (t) => {
