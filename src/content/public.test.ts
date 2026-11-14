@@ -22,6 +22,7 @@ function setup(t: TestContext, trustedProxies = 1) {
     devUser: null,
     authEmailHeader: 'X-authentik-email',
     authNameHeader: 'X-authentik-name',
+    proxySecret: null,
     authMode: 'proxy',
     authUsers: [],
   };

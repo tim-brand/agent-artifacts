@@ -67,6 +67,8 @@ These are environment variables. `pnpm dev` also reads a `.env` file; the image 
 | `AUTH_USERS` | in `password` mode | The accounts of the built-in sign-in: `email:hash` entries, separated by commas and/or white space (new lines too). Make an entry with `node src/hash-password.ts you@example.com`. At least one is required in `password` mode; the app refuses to start if it is set in `proxy` mode. See [Built-in sign-in](#built-in-sign-in). |
 | `AUTH_EMAIL_HEADER` | in `proxy` mode | The request header in which the proxy sends the signed-in user's email. There is no default, because every proxy names it differently: see [Header names that sign-in proxies send](#header-names-that-sign-in-proxies-send). Letters, digits and `-` only. Only local development with `DEV_USER` works without it. Not used in `password` mode. |
 | `AUTH_NAME_HEADER` | no | Proxy mode: the request header for the user's display name. There is no default: without it the email is shown. Not used in `password` mode. |
+| `PROXY_SECRET` | no | Proxy mode: a shared secret that the proxy sends with every request to the app host. At least 32 visible ASCII characters, no spaces. Make one with `openssl rand -base64 32`. An empty value means not set. The app refuses to start with it in `password` mode. See [A shared secret between the proxy and the app](#a-shared-secret-between-the-proxy-and-the-app). |
+| `PROXY_SECRET_HEADER` | no | Proxy mode: the request header in which the proxy sends `PROXY_SECRET`. Default `X-Proxy-Secret`. Letters, digits and `-` only, and not the same header as `AUTH_EMAIL_HEADER` or `AUTH_NAME_HEADER`. The app refuses to start with it when `PROXY_SECRET` is not set. |
 | `NODE_ENV` | no | `production` turns local development off. The image sets it. |
 | `DEV_USER` | no | Local development only, proxy mode only: the user everyone is signed in as when no identity header is present. The app refuses to start with it outside local development, and with `AUTH_MODE=password`. |
 
@@ -166,7 +168,7 @@ This section is for the sign-in proxy (`AUTH_MODE=proxy`, the default). With the
 
 In proxy mode the app trusts the identity header completely. These rules keep that safe. Check your own proxy configuration against each one.
 
-1. **Never expose the app's port directly.** Only the proxy may reach it. Publish the port on `127.0.0.1` or on a private network, and block it in the firewall. Anyone who can reach the port can send any identity header.
+1. **Never expose the app's port directly.** Only the proxy may reach it. Publish the port on `127.0.0.1` or on a private network, and block it in the firewall. Anyone who can reach the port can send any identity header. A [shared secret](#a-shared-secret-between-the-proxy-and-the-app) adds a second lock, but does not replace this rule.
 2. **Pass the `Host` header through unchanged.** The app picks what to serve from `Host`. It must equal the host of `APP_ORIGIN` or of `CONTENT_ORIGIN`, including the port if there is one (the comparison ignores case). Any other host gets a plain-text 404.
 3. **On the app host, require sign-in on every path except exactly these:**
    - `/mcp`: the MCP endpoint. Agents sign in here with a bearer token, not with the proxy.
@@ -190,6 +192,47 @@ In proxy mode the app trusts the identity header completely. These rules keep th
 8. **Allow large request bodies on `/mcp`.** The largest request is a publish, which sends the file contents inside the call. A publish may hold up to 25 MiB of files, and as base64 or escaped JSON it can take up to twice that. The app accepts a body of up to 51 MiB (`MAX_BODY_BYTES` in `src/mcp/routes.ts`). Set the proxy's body limit to at least 51 MiB on `/mcp`. Many proxies default to 1 MB or less, which makes larger publishes fail. All other paths take small bodies: 64 KB on the UI's forms, 16 KB on the public OAuth endpoints.
 
 `/mcp` answers with plain JSON, not an event stream, so it needs no special streaming settings.
+
+### A shared secret between the proxy and the app
+
+Optional, proxy mode only. Without it, the app trusts the identity header from whatever can reach its port. With `PROXY_SECRET` set, the web UI accepts a request only when it carries the secret in the `PROXY_SECRET_HEADER` header (default `X-Proxy-Secret`). A request without the right secret gets a 401 "Not signed in" page, even if it carries an identity header, and even with `DEV_USER`.
+
+It turns two deployment mistakes into a refused request instead of a sign-in bypass:
+
+- The app's port can be reached directly, without the proxy.
+- A path of the proxy forwards the identity headers that a client sent, without the proxy's sign-in.
+
+It is one more layer, not the only one. You still must not expose the app's port (rule 1), and the proxy must still remove client-sent identity headers (rule 4). Anyone who learns the secret and can reach the port can send any identity header again.
+
+To set it up:
+
+1. Make a secret: `openssl rand -base64 32`. Put it in `PROXY_SECRET` of the app, and in the proxy's configuration. Keep it out of logs and out of the repository.
+2. Make the proxy **set** the header on every request that it forwards to the app host, so that it overwrites whatever a client sent. Do not send the secret to the content host, and do not log the header.
+
+Caddy:
+
+```caddyfile
+artifacts.example.com {
+	reverse_proxy app:3000 {
+		header_up X-Proxy-Secret {env.PROXY_SECRET}
+	}
+}
+```
+
+nginx:
+
+```nginx
+location / {
+    proxy_set_header X-Proxy-Secret "<the secret>";
+    proxy_pass http://app:3000;
+}
+```
+
+With forward auth (Traefik, an Authentik outpost, oauth2-proxy in `auth_request` mode), the sign-in service does not forward the request to the app. The reverse proxy does, so add the header there, not in the sign-in service. In Traefik that is a `headers` middleware with `customRequestHeaders` on the app host's router.
+
+The secret is checked only in the web UI of the app host, including `/static/`. `/mcp`, the public OAuth paths (`/.well-known/oauth-*`, `/oauth/register`, `/oauth/token`), `/healthz` and the content host do not need it and do not check it. Their own rules from rule 3 stay as they are. The secret is not available in `password` mode, where the app does not read the identity headers anyway: the app refuses to start with both.
+
+The app keeps only a SHA-256 digest of the secret, compares in constant time, and never logs it. The 401 page names the header, never the secret, and does not say whether the header was missing or wrong.
 
 ### Header names that sign-in proxies send
 
@@ -217,6 +260,7 @@ Notes:
 | --- | --- |
 | A plain-text 404 that starts with `Unknown host.` | The `Host` header is neither the host of `APP_ORIGIN` nor of `CONTENT_ORIGIN`. Check the two settings (the port counts), and check that the proxy passes `Host` through. This is also what you get if you change `PORT` for a local trial and not the two origins. `/healthz` is the only path that works on any host. |
 | A page titled "Not signed in" that says: "This app has no sign-in of its own. A sign-in proxy in front of it must send the signed-in user's email in the `X-Forwarded-Email` request header, and that header is missing." | Proxy mode: the identity header did not arrive. The page names the header the app expects (`AUTH_EMAIL_HEADER`). Check that the proxy sets it, and that the name matches. If you wanted the built-in sign-in, set `AUTH_MODE=password`. |
+| A page titled "Not signed in" that says "This app only accepts requests that come through its sign-in proxy. The proxy must send the shared secret in the `X-Proxy-Secret` request header." (every page) | `PROXY_SECRET` is set, and the request did not carry the right secret in that header (the page names `PROXY_SECRET_HEADER`). Either the request did not come through the proxy, or the proxy does not set the header, or the value differs from `PROXY_SECRET`. See [A shared secret between the proxy and the app](#a-shared-secret-between-the-proxy-and-the-app). |
 | A page titled "Not signed in" that says "Sign in first." (status 401) | Built-in sign-in: a write or an `/api/` call came without a valid session. The session ended or expired. Sign in again. |
 | You sign in, and the login page comes back | The browser did not keep the cookie. Check that `APP_ORIGIN` is exactly the address in the browser, and that the proxy serves HTTPS: the cookie is `Secure`. |
 | "Wrong email or password." for the right password | Check the email (any case works) and the password (exactly as typed, with no extra space). The accounts are read at startup: restart after you change `AUTH_USERS`. |
@@ -236,6 +280,12 @@ Notes:
 | Public links or sign-in answer 429 for everyone at once | Count the proxies between the internet and the app and set `TRUSTED_PROXIES` to that number (rule 6 above). |
 | `APP_ORIGIN must be an origin such as https://artifacts.example.com` (same for `CONTENT_ORIGIN`) | Give a full origin with scheme. |
 | `AUTH_EMAIL_HEADER must be an HTTP header name (letters, digits and - only)` (same for `AUTH_NAME_HEADER`) | Use a plain header name. |
+| `PROXY_SECRET must be at least 32 characters` | Use a longer secret. Make one with `openssl rand -base64 32`. |
+| `PROXY_SECRET must be made of visible ASCII characters only, without spaces: …` | The secret travels in a request header. Use letters, digits and punctuation only, as `openssl rand -base64 32` gives. Check for a space or a quote that came along when you pasted it. |
+| `PROXY_SECRET is set, but AUTH_MODE is password. …` | Remove `PROXY_SECRET`, or set `AUTH_MODE=proxy`. |
+| `PROXY_SECRET_HEADER is set, but PROXY_SECRET is not. …` | Set `PROXY_SECRET`, or remove `PROXY_SECRET_HEADER`. |
+| `PROXY_SECRET_HEADER must be a different header than AUTH_EMAIL_HEADER and AUTH_NAME_HEADER` | Pick another header name for the secret. |
+| `PROXY_SECRET_HEADER must be an HTTP header name (letters, digits and - only)` | Use a plain header name. |
 | `AUTH_MODE must be proxy or password` | Use one of the two, or leave it empty. |
 | `AUTH_MODE is proxy (the default), but AUTH_EMAIL_HEADER is not set. …` | Set `AUTH_EMAIL_HEADER` to the header your sign-in proxy sends (see [Header names that sign-in proxies send](#header-names-that-sign-in-proxies-send)). If you wanted the built-in sign-in, set `AUTH_MODE=password`. |
 | `AUTH_MODE is password, but AUTH_USERS holds no account. Make an entry with: node src/hash-password.ts you@example.com` | Set `AUTH_USERS`. |

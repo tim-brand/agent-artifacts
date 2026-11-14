@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
+import { inspect } from 'node:util';
 import { ConfigError, loadConfig } from './config.ts';
 import { hashPassword } from './core/passwords.ts';
 
@@ -40,6 +42,88 @@ test('the name header is optional and has no default', () => {
   assert.equal(config.authEmailHeader, 'X-Forwarded-Email');
   assert.equal(config.authNameHeader, null);
   assert.equal(loadConfig({ ...PUBLIC, AUTH_NAME_HEADER: '' }).authNameHeader, null);
+});
+
+const PROXY_SECRET = 'Zq8vN3xK1pL6mW0tY5hB2cRd9sFa4UeGoXi7NtVb3Mc=';
+
+test('the proxy secret is optional, and empty means not set', () => {
+  assert.equal(loadConfig(PUBLIC).proxySecret, null);
+  assert.equal(loadConfig({ ...PUBLIC, PROXY_SECRET: '' }).proxySecret, null);
+  assert.equal(
+    loadConfig({ ...PUBLIC, PROXY_SECRET: '', PROXY_SECRET_HEADER: '' }).proxySecret,
+    null,
+  );
+});
+
+test('the proxy secret is kept as a SHA-256 digest, never as text', () => {
+  const config = loadConfig({ ...PUBLIC, PROXY_SECRET });
+  assert.equal(config.proxySecret?.header, 'X-Proxy-Secret');
+  assert.deepEqual(config.proxySecret?.digest, createHash('sha256').update(PROXY_SECRET).digest());
+  assert.doesNotMatch(JSON.stringify(config), new RegExp(PROXY_SECRET.replace(/\+/g, '\\+')));
+  assert.equal(inspect(config, { depth: null }).includes(PROXY_SECRET), false);
+});
+
+test('the proxy secret header can be set, and must be a header name', () => {
+  const config = loadConfig({ ...PUBLIC, PROXY_SECRET, PROXY_SECRET_HEADER: 'X-Edge-Secret' });
+  assert.equal(config.proxySecret?.header, 'X-Edge-Secret');
+  refused(
+    { ...PUBLIC, PROXY_SECRET, PROXY_SECRET_HEADER: 'a:b' },
+    /PROXY_SECRET_HEADER must be an HTTP header name/,
+  );
+});
+
+test('a short proxy secret is refused, and the error does not contain it', () => {
+  const short = 'short-but-secret-value';
+  assert.throws(
+    () => loadConfig({ ...PUBLIC, PROXY_SECRET: short }),
+    (error: unknown) =>
+      error instanceof ConfigError &&
+      error.message === 'PROXY_SECRET must be at least 32 characters' &&
+      !error.message.includes(short),
+  );
+});
+
+test('a proxy secret that a header cannot carry is refused, and the error does not contain it', () => {
+  for (const bad of [
+    'a secret with spaces 0123456789 0123456789',
+    'ünïcode-secret-0123456789-0123456789-abc',
+    'tab\tin-the-secret-0123456789-0123456789',
+  ]) {
+    assert.throws(
+      () => loadConfig({ ...PUBLIC, PROXY_SECRET: bad }),
+      (error: unknown) =>
+        error instanceof ConfigError &&
+        /PROXY_SECRET must be made of visible ASCII characters only/.test(error.message) &&
+        !error.message.includes(bad),
+    );
+  }
+});
+
+test('the proxy secret needs proxy mode, and its header needs the secret', async () => {
+  const user = `a@example.com:${await hashPassword('pw-pw-pw-pw', { logN: 14, p: 1 })}`;
+  refused(
+    { ...PUBLIC, AUTH_MODE: 'password', AUTH_USERS: user, PROXY_SECRET },
+    /PROXY_SECRET is set, but AUTH_MODE is password.*AUTH_MODE=proxy/,
+  );
+  refused(
+    { ...PUBLIC, PROXY_SECRET_HEADER: 'X-Edge-Secret' },
+    /PROXY_SECRET_HEADER is set, but PROXY_SECRET is not/,
+  );
+});
+
+test('the proxy secret header must differ from the identity headers', () => {
+  const same =
+    /PROXY_SECRET_HEADER must be a different header than AUTH_EMAIL_HEADER and AUTH_NAME_HEADER/;
+  refused({ ...PUBLIC, PROXY_SECRET, PROXY_SECRET_HEADER: 'x-forwarded-EMAIL' }, same);
+  refused(
+    {
+      ...PUBLIC,
+      PROXY_SECRET,
+      AUTH_NAME_HEADER: 'Remote-Name',
+      PROXY_SECRET_HEADER: 'remote-name',
+    },
+    same,
+  );
 });
 
 test('DEV_USER stands in for the email header in local development', () => {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +8,9 @@ import { createApp } from './app.ts';
 import type { Config } from './config.ts';
 import { createCore } from './core/index.ts';
 
-function setup(t: TestContext) {
+const SECRET = 'app-test-shared-secret-0123456789-abcdef';
+
+function setup(t: TestContext, secret?: string) {
   const dir = mkdtempSync(join(tmpdir(), 'agent-artifacts-app-'));
   const config: Config = {
     port: 0,
@@ -19,6 +22,9 @@ function setup(t: TestContext) {
     devUser: null,
     authEmailHeader: 'X-authentik-email',
     authNameHeader: 'X-authentik-name',
+    proxySecret: secret
+      ? { header: 'X-Proxy-Secret', digest: createHash('sha256').update(secret).digest() }
+      : null,
     authMode: 'proxy',
     authUsers: [],
   };
@@ -69,4 +75,26 @@ test('the app host and the content host route as before', async (t) => {
   const content = await get('/', 'content.test', { 'X-authentik-email': 'owner@example.com' });
   assert.equal(content.status, 404);
   assert.doesNotMatch(await content.text(), /Unknown host/);
+});
+
+test('the proxy secret guards the UI only: healthz, /mcp and the content host do not need it', async (t) => {
+  const get = setup(t, SECRET);
+  const id = { 'X-authentik-email': 'owner@example.com' };
+
+  const refused = await get('/', 'app.test', id);
+  assert.equal(refused.status, 401);
+  assert.match(await refused.text(), /X-Proxy-Secret/);
+  const ok = await get('/', 'app.test', { ...id, 'X-Proxy-Secret': SECRET });
+  assert.equal(ok.status, 200);
+
+  assert.equal((await get('/healthz', 'app.test')).status, 200);
+
+  // /mcp answers with its own bearer-token 401, not the "Not signed in" page.
+  const mcp = await get('/mcp', 'app.test');
+  assert.equal(mcp.status, 401);
+  assert.doesNotMatch(await mcp.text(), /sign-in proxy|Not signed in/);
+
+  const content = await get('/s/bad/x/1/index.html', 'content.test');
+  assert.doesNotMatch(await content.text(), /sign-in proxy|Not signed in/);
+  assert.notEqual(content.status, 401);
 });

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { parsePasswordHash } from './core/passwords.ts';
 
 /** An account of the built-in sign-in: a lower-case email and its password hash text. */
@@ -33,6 +34,11 @@ export type Config = {
   authEmailHeader: string | null;
   /** The request header with the user's display name. Null when not set: the email is shown. */
   authNameHeader: string | null;
+  /**
+   * Proxy mode, optional: the shared secret between the sign-in proxy and the app. Only the SHA-256
+   * digest of the secret is kept, and the header in which the proxy sends it. Null when not set.
+   */
+  proxySecret: { header: string; digest: Buffer } | null;
 };
 
 /** A bad or missing setting. The server prints its message on one line and exits. */
@@ -119,6 +125,40 @@ function parseUsers(text: string): AuthUser[] {
   return users;
 }
 
+/**
+ * PROXY_SECRET and PROXY_SECRET_HEADER (proxy mode only). Keeps the SHA-256 digest of the secret,
+ * never the secret. No error message contains the value.
+ */
+function parseProxySecret(env: NodeJS.ProcessEnv, mode: string): Config['proxySecret'] {
+  const secret = env.PROXY_SECRET;
+  const header = headerName(env, 'PROXY_SECRET_HEADER');
+  if (!secret) {
+    if (header) {
+      throw new ConfigError(
+        'PROXY_SECRET_HEADER is set, but PROXY_SECRET is not. Set PROXY_SECRET, or remove PROXY_SECRET_HEADER',
+      );
+    }
+    return null;
+  }
+  if (mode === 'password') {
+    throw new ConfigError(
+      'PROXY_SECRET is set, but AUTH_MODE is password. The shared secret belongs to a sign-in proxy: remove it, or set AUTH_MODE=proxy',
+    );
+  }
+  if (secret.length < 32) throw new ConfigError('PROXY_SECRET must be at least 32 characters');
+  // A header value loses white space at its ends and cannot carry every character, so such a
+  // secret would never match, and the 401 page would not say why.
+  if (!/^[\x21-\x7e]+$/.test(secret)) {
+    throw new ConfigError(
+      'PROXY_SECRET must be made of visible ASCII characters only, without spaces: the proxy sends it in a request header',
+    );
+  }
+  return {
+    header: header ?? 'X-Proxy-Secret',
+    digest: createHash('sha256').update(secret).digest(),
+  };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const signingSecret = required(env, 'SIGNING_SECRET');
   if (signingSecret.length < 32) {
@@ -154,7 +194,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     devUser: env.DEV_USER || null,
     authEmailHeader: headerName(env, 'AUTH_EMAIL_HEADER'),
     authNameHeader: headerName(env, 'AUTH_NAME_HEADER'),
+    proxySecret: parseProxySecret(env, mode),
   };
+  const secretHeader = config.proxySecret?.header.toLowerCase();
+  if (
+    secretHeader &&
+    (secretHeader === config.authEmailHeader?.toLowerCase() ||
+      secretHeader === config.authNameHeader?.toLowerCase())
+  ) {
+    throw new ConfigError(
+      'PROXY_SECRET_HEADER must be a different header than AUTH_EMAIL_HEADER and AUTH_NAME_HEADER',
+    );
+  }
 
   if (mode === 'proxy' && usersText.trim() !== '') {
     throw new ConfigError(
