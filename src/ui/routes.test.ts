@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { describe, it } from 'node:test';
 import type { Config } from '../config.ts';
 import {
@@ -376,6 +377,7 @@ function fakeDeps(overrides: {
     devUser: null,
     authEmailHeader: 'X-authentik-email',
     authNameHeader: 'X-authentik-name',
+    proxySecret: null,
     authMode: 'proxy',
     authUsers: [],
     ...overrides.config,
@@ -533,6 +535,96 @@ describe('auth', () => {
     });
     assert.equal(res.status, 401);
     assert.match(await res.text(), /AUTH_EMAIL_HEADER/);
+  });
+
+  describe('with a proxy secret', () => {
+    const REAL = 'r3al-Secret-value-0123456789-abcdefghij';
+    const HEADER = 'X-Proxy-Secret';
+    const secured = (extra: Partial<Config> = {}) =>
+      fakeDeps({
+        config: {
+          proxySecret: { header: HEADER, digest: createHash('sha256').update(REAL).digest() },
+          ...extra,
+        },
+      }).app;
+    const hit = (app: ReturnType<typeof secured>, secret?: string, path = '/', id = true) =>
+      app.request(`${APP}${path}`, {
+        headers: { ...(id ? USER : {}), ...(secret === undefined ? {} : { [HEADER]: secret }) },
+      });
+
+    it('refuses the identity header without the secret header, and names the header', async () => {
+      const res = await hit(secured());
+      assert.equal(res.status, 401);
+      const body = await res.text();
+      assert.match(body, /only accepts requests that come through its sign-in proxy/);
+      assert.match(body, /X-Proxy-Secret/);
+      assert.doesNotMatch(body, /class="side"/);
+      assert.doesNotMatch(body, /owner@example\.com/);
+      assert.doesNotMatch(body, new RegExp(REAL));
+    });
+
+    it('refuses a wrong secret, and never echoes what was sent', async () => {
+      const sent = 'not-the-real-secret-but-sent-by-a-client';
+      const res = await hit(secured(), sent);
+      assert.equal(res.status, 401);
+      const body = await res.text();
+      assert.doesNotMatch(body, new RegExp(sent));
+      assert.doesNotMatch(body, new RegExp(REAL));
+    });
+
+    it('refuses a secret of another length, one that differs in the last character, and an empty one', async () => {
+      const app = secured();
+      for (const sent of [
+        REAL.slice(0, -1),
+        `${REAL}x`,
+        `${REAL.slice(0, -1)}!`,
+        '',
+        REAL.toUpperCase(),
+      ]) {
+        assert.equal((await hit(app, sent)).status, 401, JSON.stringify(sent));
+      }
+    });
+
+    it('signs in with the right secret and the identity header', async () => {
+      const res = await hit(secured(), REAL);
+      assert.equal(res.status, 200);
+      assert.match(await res.text(), /<span class="who-name">owner@example\.com<\/span>/);
+    });
+
+    it('with the right secret and no identity header still asks for the identity header', async () => {
+      const res = await hit(secured(), REAL, '/', false);
+      assert.equal(res.status, 401);
+      const body = await res.text();
+      assert.match(body, /no sign-in of its own/);
+      assert.match(body, /X-authentik-email/);
+    });
+
+    it('does not let DEV_USER bypass the secret', async () => {
+      const app = secured({ devUser: 'dev@local' });
+      const without = await app.request(`${APP}/`);
+      assert.equal(without.status, 401);
+      assert.match(await without.text(), /X-Proxy-Secret/);
+      const withSecret = await app.request(`${APP}/`, { headers: { [HEADER]: REAL } });
+      assert.equal(withSecret.status, 200);
+      assert.match(await withSecret.text(), /<span class="who-name">dev@local<\/span>/);
+    });
+
+    it('covers /static/ too, and the header name is case-insensitive', async () => {
+      const app = secured();
+      assert.equal((await hit(app, undefined, '/static/app.css')).status, 401);
+      assert.equal((await hit(app, REAL, '/static/app.css')).status, 200);
+      const lower = await app.request(`${APP}/`, { headers: { ...USER, 'x-proxy-secret': REAL } });
+      assert.equal(lower.status, 200);
+    });
+
+    it('refuses a form post without the secret, before anything else', async () => {
+      const res = await secured().request(`${APP}/settings/theme`, {
+        method: 'POST',
+        headers: { ...USER, Origin: APP, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'theme=dark',
+      });
+      assert.equal(res.status, 401);
+    });
   });
 
   it('limits a form post to 64 KB, by the bytes read', async () => {

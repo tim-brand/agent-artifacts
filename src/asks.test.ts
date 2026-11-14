@@ -24,6 +24,7 @@ async function setup(t: TestContext) {
     devUser: null,
     authEmailHeader: 'X-authentik-email',
     authNameHeader: 'X-authentik-name',
+    proxySecret: null,
     authMode: 'proxy',
     authUsers: [],
   };

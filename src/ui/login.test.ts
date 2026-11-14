@@ -42,6 +42,7 @@ function setup(t: TestContext, options: Options = {}) {
     devUser: null,
     authEmailHeader: 'X-authentik-email',
     authNameHeader: 'X-authentik-name',
+    proxySecret: null,
     authMode: password ? 'password' : 'proxy',
     authUsers: password
       ? [

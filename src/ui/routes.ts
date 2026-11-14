@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -72,6 +72,20 @@ const COOKIES = { theme: 'aa_theme', view: 'aa_view', panel: 'aa_panel' } as con
 const PUBLIC_PATHS = new Set(PUBLIC_OAUTH_PATHS);
 const isPublicPath = (path: string) =>
   path === '/mcp' || path.startsWith('/mcp/') || PUBLIC_PATHS.has(path);
+
+/**
+ * Does the value sent in the proxy secret header match the configured digest? Both sides are
+ * hashed, so the buffers always have the same length, and the comparison takes constant time.
+ * A missing header is the empty string, which does not match.
+ */
+export function carriesSecret(sent: string | undefined, digest: Buffer): boolean {
+  return timingSafeEqual(
+    createHash('sha256')
+      .update(sent ?? '')
+      .digest(),
+    digest,
+  );
+}
 
 /** Positive integer from a path segment, else null. */
 function versionParam(value: string): number | null {
@@ -222,6 +236,17 @@ export function createUiRoutes(deps: Deps, options: UiOptions = {}): Hono {
         return c.redirect(`/login?${back}`, 302);
       }
       return message(c, 401, 'Not signed in', 'Sign in first.');
+    }
+    // With a shared secret, nothing below counts (not the identity header, not DEV_USER) on a
+    // request that does not carry it. It does not say whether the header was missing or wrong.
+    const shared = config.proxySecret;
+    if (shared && !carriesSecret(c.req.header(shared.header), shared.digest)) {
+      return message(
+        c,
+        401,
+        'Not signed in',
+        `This app only accepts requests that come through its sign-in proxy. The proxy must send the shared secret in the ${shared.header} request header.`,
+      );
     }
     // loadConfig makes sure that the email header or DEV_USER is set.
     const emailHeader = config.authEmailHeader;

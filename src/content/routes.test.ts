@@ -170,6 +170,7 @@ const deps = {
     devUser: null,
     authEmailHeader: 'X-authentik-email',
     authNameHeader: 'X-authentik-name',
+    proxySecret: null,
     authMode: 'proxy',
     authUsers: [],
   },
