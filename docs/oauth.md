@@ -24,7 +24,7 @@ With a sign-in proxy, the proxy must leave these open, with no sign-in (see [Dep
 | POST | `/oauth/register` | Dynamic client registration (RFC 7591): public clients only (`token_endpoint_auth_method: none`, whatever was asked). Redirect URIs must be `https`, or `http` on `127.0.0.1`, `localhost` or `[::1]`. Rate limited to a burst of 10, then one a minute, per client IP, and a burst of 60, then 10 a minute, overall. |
 | POST | `/oauth/token` | `authorization_code` with PKCE, and `refresh_token`. Form-encoded, errors as RFC 6749 JSON. Rate limited to a burst of 30, then 30 a minute, per client IP. |
 
-The rate limits are kept in memory and use the first entry of `X-Forwarded-For` as the client IP, so the proxy must set it. The public endpoints read at most 16 KB of request body.
+The rate limits are kept in memory and use `X-Forwarded-For` for the client IP, so the proxy must set or append it. The app takes the entry `TRUSTED_PROXIES` from the right (default 1, one proxy); see [Deployment](deployment.md#what-the-reverse-proxy-must-do). The public endpoints read at most 16 KB of request body.
 
 **Behind the sign-in:** `GET /oauth/authorize` checks the request and shows the consent page. `POST /oauth/authorize` is the Allow or Deny form, behind the web UI's Origin check: it checks everything again and redirects back with `code` or `error`, `state` and `iss` (RFC 9207). An unknown client, or a `redirect_uri` that was not registered, gets an error page instead of a redirect. The consent page widens `form-action` to the client's origin, because browsers apply it to the redirect after the form is posted.
 

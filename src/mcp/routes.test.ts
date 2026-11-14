@@ -219,6 +219,7 @@ function setup(
   const deps: Deps = {
     config: {
       port: 3000,
+      trustedProxies: 1,
       dataDir: './data',
       appOrigin: 'https://app.test',
       contentOrigin: 'https://content.test',

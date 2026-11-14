@@ -62,7 +62,7 @@ const BRIDGE_SOURCE = readFileSync(new URL('./bridge.js', import.meta.url), 'utf
 
 export function createContentRoutes(deps: Deps): Hono {
   const app = new Hono();
-  const { appOrigin } = deps.config;
+  const { appOrigin, trustedProxies } = deps.config;
   // The bridge posts to, and only listens to, the app origin.
   const bridgeSource = BRIDGE_SOURCE.replace("'__APP_ORIGIN__'", JSON.stringify(appOrigin));
   const bridgeHash = createHash('sha256').update(bridgeSource).digest('hex').slice(0, 16);
@@ -103,7 +103,7 @@ export function createContentRoutes(deps: Deps): Hono {
 
   // Unknown, revoked, expired and deleted all get the same 404, so a token can't be probed.
   const publicFile = async (req: HonoRequest, pathname: string) => {
-    if (!limiter.take(clientIp(req))) {
+    if (!limiter.take(clientAddress(req.header('x-forwarded-for'), trustedProxies))) {
       const res = error(429, 'Too many requests', PUBLIC);
       res.headers.set('Retry-After', '1');
       return res;
@@ -246,10 +246,6 @@ function securityHeaders(contentType: string, policy: Policy): Record<string, st
     'Cache-Control': policy.cacheControl,
     ...policy.headers,
   };
-}
-
-function clientIp(req: HonoRequest): string {
-  return clientAddress(req.header('x-forwarded-for'));
 }
 
 function maxAge(exp: number): number {

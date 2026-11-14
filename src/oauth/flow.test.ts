@@ -18,6 +18,7 @@ function setup(t: TestContext) {
   const dir = mkdtempSync(join(tmpdir(), 'agent-artifacts-flow-'));
   const config: Config = {
     port: 0,
+    trustedProxies: 1,
     dataDir: dir,
     appOrigin: APP,
     contentOrigin: 'https://content.test',
@@ -422,6 +423,19 @@ describe('public endpoints', () => {
     assert.equal(limited.status, 429);
     assert.equal(limited.headers.get('retry-after'), '60');
     assert.equal((await register(request, {}, '10.2.0.2')).status, 201);
+  });
+
+  it('a spoofed first X-Forwarded-For entry gives no fresh bucket', async (t) => {
+    const { request } = setup(t);
+    for (let i = 0; i < 10; i++)
+      assert.equal((await register(request, {}, `9.9.9.${i}, 10.4.0.1`)).status, 201);
+    assert.equal((await register(request, {}, '8.8.8.8, 10.4.0.1')).status, 429);
+    assert.equal((await register(request, {}, '8.8.8.8, 10.4.0.2')).status, 201);
+    const body = { grant_type: 'refresh_token', refresh_token: 'aar_x', client_id: 'c' };
+    for (let i = 0; i < 30; i++) {
+      assert.equal((await request('/oauth/token', form(body, `9.9.9.${i}, 10.5.0.1`))).status, 400);
+    }
+    assert.equal((await request('/oauth/token', form(body, '8.8.8.8, 10.5.0.1'))).status, 429);
   });
 
   it('the token endpoint is rate limited per client IP', async (t) => {

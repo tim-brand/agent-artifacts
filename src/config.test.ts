@@ -113,6 +113,18 @@ test('an empty PORT or DATA_DIR means the default', () => {
   refused({ ...PUBLIC, PORT: 'http' }, /PORT must be a port number/);
 });
 
+test('TRUSTED_PROXIES is the number of proxies, from 1 to 32, default 1', () => {
+  assert.equal(loadConfig(PUBLIC).trustedProxies, 1);
+  assert.equal(loadConfig({ ...PUBLIC, TRUSTED_PROXIES: '' }).trustedProxies, 1);
+  assert.equal(loadConfig({ ...PUBLIC, TRUSTED_PROXIES: '2' }).trustedProxies, 2);
+  for (const bad of ['0', '-1', '1.5', 'abc', '33']) {
+    refused(
+      { ...PUBLIC, TRUSTED_PROXIES: bad },
+      /TRUSTED_PROXIES must be a whole number from 1 to 32: the number of reverse proxies in front of the app/,
+    );
+  }
+});
+
 // ---- The built-in sign-in ----
 
 const HASH_A = await hashPassword('password of a', { logN: 14, p: 1 });

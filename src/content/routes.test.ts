@@ -162,6 +162,7 @@ const artifacts: ArtifactService = {
 const deps = {
   config: {
     port: 0,
+    trustedProxies: 1,
     dataDir: '',
     appOrigin: APP,
     contentOrigin: CONTENT,

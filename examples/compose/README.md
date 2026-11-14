@@ -124,7 +124,7 @@ Everyone who can sign in sees and can change everything.
 - **Upgrade.** Back up, then pull the new code and run `docker compose up -d --build`. The database is updated at startup.
 - **One replica only.** SQLite allows one writer. Do not scale `app` above 1.
 - **Prebuilt image.** `compose.yaml` has a commented `image: ghcr.io/tim-brand/agent-artifacts:0.3.1` line to use instead of `build:`. It is built for `linux/amd64` and `linux/arm64` (releases up to 0.3.0: `linux/amd64` only). The built-in sign-in needs release 0.2.0 or later. This example was only tested with `build:`.
-- **The client address.** Caddy replaces a client-sent `X-Forwarded-For` with the real address, and the app uses it for the sign-in limit. Do not add `trusted_proxies` to the `Caddyfile` unless another proxy sits in front of Caddy.
+- **The client address.** Caddy replaces a client-sent `X-Forwarded-For` with the real address, and the app uses it for the sign-in limit. Caddy is the only proxy, so the default `TRUSTED_PROXIES=1` fits. Do not add `trusted_proxies` to the `Caddyfile` unless another proxy sits in front of Caddy.
 
 ## What this example does not do
 

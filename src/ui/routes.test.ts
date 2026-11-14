@@ -368,6 +368,7 @@ function fakeDeps(overrides: {
 
   const config: Config = {
     port: 0,
+    trustedProxies: 1,
     dataDir: '/tmp',
     appOrigin: APP,
     contentOrigin: CONTENT,
