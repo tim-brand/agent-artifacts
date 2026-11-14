@@ -109,7 +109,7 @@ Local development means `NODE_ENV` is not `production` and the host name of `APP
 
 ## Development
 
-Contributions are welcome: read [`CONTRIBUTING.md`](CONTRIBUTING.md), and [`AGENTS.md`](AGENTS.md) for the layout, conventions and security rules. There is no build step: Node runs the TypeScript in `src/` directly.
+Contributions are welcome: read [`CONTRIBUTING.md`](CONTRIBUTING.md) and the [code of conduct](CODE_OF_CONDUCT.md), and [`AGENTS.md`](AGENTS.md) for the layout, conventions and security rules. There is no build step: Node runs the TypeScript in `src/` directly.
 
 | Command          | What it does                                                   |
 | ---------------- | -------------------------------------------------------------- |
