@@ -494,8 +494,8 @@ describe('who is signed in', () => {
     const page = await body(await request('/', { cookie, headers: FORGED }));
     assert.match(page, /<span class="who-name">b@example\.com<\/span>/);
     assert.doesNotMatch(page, /intruder|Intruder/);
-    // The display name is the email, whatever the name header says.
-    assert.match(page, /<small>signed in<\/small>/);
+    // The display name is the email, whatever the name header says, so it is shown once.
+    assert.match(page, /<span class="who-name">b@example\.com<\/span><\/span>/);
     const consentless = await body(await request('/connect', { cookie, headers: FORGED }));
     assert.doesNotMatch(consentless, /Intruder|intruder/);
   });

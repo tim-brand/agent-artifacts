@@ -4,7 +4,7 @@ Agent Artifacts is released under the MIT license (see `LICENSE`). This file lis
 
 ## Open Artifacts
 
-The look of the web UI follows the "Studio" design of [Open Artifacts](https://github.com/open-artifacts-ai/open-artifacts) and uses its design tokens, in light and dark. The code in this repository is otherwise this project's own. The tokens are in `src/ui/static/app.css`.
+The web UI started from the "Studio" design of [Open Artifacts](https://github.com/open-artifacts-ai/open-artifacts): its layout and its design tokens, in light and dark. The UI has since got its own look and tokens, but parts of its layout and components in `src/ui/static/app.css` still come from that design. The code in this repository is otherwise this project's own.
 
 Open Artifacts is licensed under the MIT license:
 

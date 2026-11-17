@@ -116,6 +116,8 @@ const ICONS: Record<string, string> = {
   plus: '<path d="M8 3v10M3 8h10"/>',
   pencil: '<path d="M10.5 2.5 13.5 5.5 5.5 13.5H2.5v-3zM9 4l3 3"/>',
   diff: '<path d="M8 2.5v6M5 5.5h6M5 12.5h6"/>',
+  frame:
+    '<path d="M1.75 2.75h12.5v10.5H1.75zM5 5.5h6v5H5zM3.4 4.5h.01M3.4 8h.01M3.4 11.5h.01M12.6 4.5h.01M12.6 8h.01M12.6 11.5h.01"/>',
 };
 
 const SPRITE = raw(
@@ -127,6 +129,10 @@ const SPRITE = raw(
 /** An icon from the sprite. */
 export const icon = (name: keyof typeof ICONS | string, cls = '') =>
   html`<svg class="ic${cls ? ` ${cls}` : ''}" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
+
+/** The mark: a frame from a contact sheet. */
+export const logo = (small = false) =>
+  html`<span class="logo${small ? ' sm' : ''}">${icon('frame')}</span>`;
 
 /** Two letters for an avatar: of a name's first two words, or of an email's local part. */
 export function initials(name: string): string {
@@ -193,7 +199,7 @@ export const signOutForm = () =>
 /** The search form; `/` focuses the first one on the page. */
 export const searchBox = (query: string, small = false) =>
   html`<form class="search${small ? ' sm' : ''}" method="get" action="/" role="search">
-${icon('search')}<input type="search" name="q" value="${query}" placeholder="${small ? 'Search' : 'Search titles and content'}" maxlength="200" aria-label="Search artifacts" data-search>
+${icon('search')}<input type="search" name="q" value="${query}" placeholder="Search" maxlength="200" aria-label="Search artifacts" data-search>
 <kbd class="kbd">/</kbd>
 </form>`;
 
@@ -217,7 +223,7 @@ export function appShell(shell: Shell, opts: { title: string; body: Html }): Htm
   const body = html`<div class="shell">
 <aside class="side" id="side">
 <div class="side-head">
-<a class="brand" href="/"><span class="logo">${icon('lib')}</span>Agent Artifacts</a>
+<a class="brand" href="/">${logo()}Agent Artifacts</a>
 <a class="btn ghost icon menu-btn" href="#side" aria-label="Menu" aria-controls="side-body" aria-expanded="false" data-menu>${icon('menu')}</a>
 </div>
 <div class="side-body" id="side-body">
@@ -232,7 +238,7 @@ ${nav('/connect', 'Connect an agent', 'plug', shell.nav === 'connect')}
 ${nav('/docs/runtime', 'Live pages docs', 'book', shell.nav === 'docs')}
 </nav>
 <div class="who">
-<div class="who-row"><span class="av" aria-hidden="true">${initials(shell.name)}</span><span class="who-text"><span class="who-name">${shell.name}</span><small>${shell.name === shell.user ? 'signed in' : shell.user}</small></span></div>
+<div class="who-row"><span class="av" aria-hidden="true">${initials(shell.name)}</span><span class="who-text"><span class="who-name">${shell.name}</span>${shell.name === shell.user ? '' : html`<small>${shell.user}</small>`}</span></div>
 ${themeSwitch(shell.theme, shell.path)}
 ${shell.signOut ? signOutForm() : ''}
 </div>
@@ -263,7 +269,7 @@ export function messageDocument(opts: {
     theme: opts.theme,
     bodyClass: 'bare',
     body: html`<main class="message">
-<a class="brand" href="/"><span class="logo">${icon('lib')}</span>Agent Artifacts</a>
+<a class="brand" href="/">${logo()}Agent Artifacts</a>
 <div class="message-card">
 ${opts.status ? html`<p class="status">${opts.status}</p>` : ''}
 <h1>${opts.title}</h1>

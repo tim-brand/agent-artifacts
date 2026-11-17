@@ -29,6 +29,7 @@ import {
   htmlPage,
   icon,
   initials,
+  logo,
   type Shell,
   searchBox,
   signOutForm,
@@ -105,21 +106,24 @@ export function highlight(text: string): Html {
 
 const formatIcon = (format: Format) => icon(format);
 
-// ---- Pills ----
+/** The first characters of an artifact's id, before its title: enough to tell artifacts apart. */
+const shortId = (id: string) => html`<span class="sid" title="${id}">${id.slice(0, 6)}</span>`;
 
-const commentsPill = (n: number) =>
+// ---- Flags: what an artifact has, as quiet text. Only an open ask takes the ink. ----
+
+const commentsFlag = (n: number) =>
   n
-    ? html`<span class="pill cmt" title="${plural(n, 'open comment thread')}">${icon('cmt')}${n}</span>`
+    ? html`<span class="flag comments" title="${plural(n, 'open comment thread')}">${plural(n, 'comment')}</span>`
     : '';
-const asksPill = (n: number) =>
+const asksFlag = (n: number) =>
   n
-    ? html`<span class="pill ask" title="${plural(n, 'ask')} waiting for your answer">${icon('ask')}${n}</span>`
+    ? html`<span class="flag ask" title="${plural(n, 'ask')} waiting for your answer">${plural(n, 'ask')}</span>`
     : '';
-const livePill = (a: Artifact) =>
-  a.capabilities.db ? html`<span class="pill live">${icon('live')}Live</span>` : '';
-const publicPill = (n: number) =>
+const liveFlag = (a: Artifact) =>
+  a.capabilities.db ? html`<span class="flag live">${icon('live')}Live</span>` : '';
+const publicFlag = (n: number) =>
   n
-    ? html`<span class="pill pub" title="${plural(n, 'public link')}">${icon('globe')}Public</span>`
+    ? html`<span class="flag pub" title="${plural(n, 'public link')}">${icon('globe')}Public</span>`
     : '';
 
 // ---- Library ----
@@ -174,10 +178,11 @@ function card(item: LibraryItem, preview: string | null): Html {
   const thumb = preview
     ? html`<div class="thumb"><div class="mini"><iframe src="${preview}" sandbox="" loading="lazy" tabindex="-1" aria-hidden="true" title=""></iframe></div></div>`
     : html`<div class="thumb tile">${formatIcon(a.format)}<b>${a.title}</b></div>`;
-  return html`<article class="card">
+  // An open ask frames the preview.
+  return html`<article class="card${item.openAsks ? ' needs' : ''}">
 ${thumb}
-<h2 class="ctitle">${formatIcon(a.format)}<a class="stretch" href="/a/${encodeURIComponent(a.id)}">${a.title}</a></h2>
-<div class="meta"><span class="agent">${item.agent}</span>${asksPill(item.openAsks)}${commentsPill(item.openComments)}${livePill(a)}${publicPill(item.publicLinks)}<span class="t">${time(a.updatedAt)}</span></div>
+<h2 class="ctitle">${shortId(a.id)}<a class="stretch" href="/a/${encodeURIComponent(a.id)}">${a.title}</a></h2>
+<div class="meta"><span class="agent">${item.agent}</span>${asksFlag(item.openAsks)}${commentsFlag(item.openComments)}${liveFlag(a)}${publicFlag(item.publicLinks)}<span class="t">${time(a.updatedAt)}</span></div>
 </article>`;
 }
 
@@ -189,7 +194,7 @@ function row(item: LibraryItem): Html {
   return html`<article class="row">
 ${formatIcon(a.format)}
 <div class="row-main"><a class="ttl stretch" href="/a/${encodeURIComponent(a.id)}">${a.title}</a><div class="sub">${subline(a)}</div></div>
-<div class="row-pills">${asksPill(item.openAsks)}${commentsPill(item.openComments)}${livePill(a)}${publicPill(item.publicLinks)}</div>
+<div class="row-flags">${asksFlag(item.openAsks)}${commentsFlag(item.openComments)}${liveFlag(a)}${publicFlag(item.publicLinks)}</div>
 <div class="sub row-agent">${item.agent}</div>
 <div class="sub t">${time(a.updatedAt)}</div>
 </article>`;
@@ -214,7 +219,7 @@ export function libraryPage(opts: {
   )}</nav>`;
 
   const formatMenu = menu(
-    html`<span class="chip${state.format ? ' set' : ''}">${icon('filter')}Format${state.format ? html`<b>${FORMAT_LABELS[state.format]}</b>${icon('chev')}` : ''}</span>`,
+    html`<span class="chip${state.format ? ' set' : ''}">Format${state.format ? html`<b>${FORMAT_LABELS[state.format]}</b>` : ''}${icon('chev')}</span>`,
     html`${menuItem(libraryHref(state, { format: undefined }), 'All formats', !state.format)}${FORMATS.map(
       (f) =>
         menuItem(
@@ -247,11 +252,15 @@ export function libraryPage(opts: {
 <a href="${libraryHref(state, { view: 'grid' }, true)}" aria-label="Grid" title="Grid"${state.view === 'grid' ? raw(' aria-current="true" class="on"') : ''}>${icon('grid')}</a><a href="${libraryHref(state, { view: 'list' }, true)}" aria-label="List" title="List"${state.view === 'list' ? raw(' aria-current="true" class="on"') : ''}>${icon('rows')}</a>
 </span>`;
 
-  const filters = html`<div class="filters">
+  // The tabs, the filters, the sort and the view share one row; it wraps on narrow screens.
+  const toolbar = html`<div class="toolbar">
+${tabs}
+<div class="filters">
 ${formatMenu}${agentMenu}
 ${filtered ? html`<a class="clear" href="${libraryHref(state, { format: undefined, agent: undefined })}">Clear filters</a>` : ''}
 <span class="sp"></span>
 ${sortMenu}${viewToggle}
+</div>
 </div>`;
 
   const empty =
@@ -275,8 +284,7 @@ ${sortMenu}${viewToggle}
   return appShell(opts.shell, {
     title: 'Library',
     body: html`<div class="h1row"><h1>Library</h1><span class="count">${plural(shown, 'artifact')}</span></div>
-${tabs}
-${filters}
+${toolbar}
 ${items}
 ${more}`,
   });
@@ -302,7 +310,7 @@ ${opts.hits.map(
 ${formatIcon(a.format)}
 <div class="row-main"><a class="ttl stretch" href="/a/${encodeURIComponent(a.id)}">${a.title}</a><div class="sub">${subline(a)}</div>
 ${text ? html`<p class="hit">${highlight(text)}</p>` : ''}</div>
-<div class="row-pills">${commentsPill(opts.openComments[a.id] ?? 0)}${livePill(a)}</div>
+<div class="row-flags">${commentsFlag(opts.openComments[a.id] ?? 0)}${liveFlag(a)}</div>
 <div class="sub row-agent">${FORMAT_LABELS[a.format]}</div>
 <div class="sub t">${time(a.updatedAt)}</div>
 </article>`,
@@ -374,9 +382,9 @@ export function artifactPage(opts: {
 </div></details>`;
 
   const tbar = html`<div class="tbar">
-${formatIcon(v.format)}<h1 class="title">${a.title}</h1><span class="muted fmt">${FORMAT_LABELS[v.format]}</span>
-${declared.length ? html`<a class="pill live" href="/docs/runtime" title="Live page: ${declared.join(', ')}">${icon('live')}Live</a>` : ''}
-${activeLinks ? html`<a class="pill pub" href="${tabHref('share')}" data-tab-link="share">${icon('globe')}${plural(activeLinks, 'public link')}</a>` : ''}
+${shortId(a.id)}<h1 class="title">${a.title}</h1><span class="muted fmt">${FORMAT_LABELS[v.format]}</span>
+${declared.length ? html`<a class="flag live" href="/docs/runtime" title="Live page: ${declared.join(', ')}">${icon('live')}Live</a>` : ''}
+${activeLinks ? html`<a class="flag pub" href="${tabHref('share')}" data-tab-link="share">${icon('globe')}${plural(activeLinks, 'public link')}</a>` : ''}
 <span class="sp"></span>
 ${versionMenu}
 <a class="btn ghost raw" href="${entryUrl}" target="_blank" rel="noopener noreferrer">${icon('ext')}<span>Open raw</span></a>
@@ -407,8 +415,8 @@ ${moreMenu}
     html`<section class="pbody" id="pane-${name}" role="tabpanel" aria-labelledby="tab-${name}" data-pane="${name}"${name === opts.panel.tab ? '' : raw(' hidden')}>${body}</section>`;
 
   const panel = html`<aside class="panel" id="panel" aria-label="Artifact panel"${opts.panel.open ? '' : raw(' hidden')}>
-<div class="ptabs" role="tablist">
-${tab('versions', 'Versions')}${tab('comments', 'Comments', open.length, waiting)}${tab('share', 'Share')}${tab('details', 'Details')}
+<div class="ptabs">
+<div class="ptab-group" role="tablist">${tab('versions', 'Versions')}${tab('comments', 'Comments', open.length, waiting)}${tab('share', 'Share')}${tab('details', 'Details')}</div>
 <span class="sp"></span>
 <a class="btn ghost icon sm" href="${tabHref('closed')}" data-panel-close aria-label="Close panel">${icon('x')}</a>
 </div>
@@ -446,7 +454,7 @@ function viewerTop(
 ): Html {
   return html`<header class="vtop">
 <a class="btn ghost icon" href="${back}" aria-label="Back">${icon('back')}</a>
-<nav class="crumbs" aria-label="Breadcrumbs"><a href="/"><span class="logo sm">${icon('lib')}</span>Library</a><span aria-hidden="true">/</span>${crumbs}</nav>
+<nav class="crumbs" aria-label="Breadcrumbs"><a href="/">${logo(true)}Library</a><span aria-hidden="true">/</span>${crumbs}</nav>
 <span class="sp"></span>
 ${searchBox('', true)}
 <details class="menu"><summary class="av-btn" aria-label="Account and theme"><span class="av sm">${initials(who.name)}</span></summary>
@@ -576,12 +584,12 @@ function askCard(
     const rec = ask.recommended?.optionId === o.id ? ask.recommended : null;
     const on = answer?.optionId === o.id;
     return html`<button class="ask-opt${on ? ' on' : ''}${rec ? ' rec' : ''}" type="submit" name="optionId" value="${o.id}" aria-pressed="${String(on)}"${closed ? raw(' disabled') : ''}>
-<span class="ask-l1"><span class="ask-label">${o.label}</span>${rec ? html`<span class="tag">Recommended</span>` : ''}${on ? icon('check') : ''}</span>
+<span class="ask-l1"><span class="ask-label">${o.label}</span>${rec ? html`<span class="tag">Recommended</span>` : ''}</span>
 ${o.detail ? html`<span class="ask-detail">${o.detail}</span>` : ''}
 ${rec ? html`<span class="ask-why">${rec.why}</span>` : ''}
 </button>`;
   };
-  return html`<div class="ask${answer ? ' answered' : ''}" id="ask-${commentId}">
+  return html`<div class="ask-card${answer ? ' answered' : ''}" id="ask-${commentId}">
 <p class="ask-q">${icon('ask')}<span>${ask.question}</span></p>
 <form method="post" action="${action}" class="ask-opts">
 <input type="hidden" name="version" value="${version}">
@@ -801,7 +809,7 @@ ${opts.mode === 'side' ? html`<input type="hidden" name="mode" value="side">` : 
   };
 
   const tbar = html`<div class="tbar">
-${formatIcon(c.to.format)}<h1 class="title">${a.title}</h1><span class="muted fmt">Compare versions</span>
+${shortId(a.id)}<h1 class="title">${a.title}</h1><span class="muted fmt">Compare versions</span>
 <span class="sp"></span>
 ${picker}
 <span class="seg text" role="group" aria-label="Show">${modeLink('changes', 'Changes')}${modeLink('side', 'Side by side')}</span>
@@ -931,7 +939,7 @@ export function loginPage(opts: {
     theme: opts.theme,
     bodyClass: 'bare',
     body: html`<main class="message login">
-<a class="brand" href="/"><span class="logo">${icon('lib')}</span>Agent Artifacts</a>
+<a class="brand" href="/">${logo()}Agent Artifacts</a>
 <div class="message-card">
 <h1>Sign in</h1>
 ${opts.error ? html`<div class="notice error" role="alert">${opts.error}</div>` : ''}
@@ -974,7 +982,7 @@ export function consentPage(opts: {
     theme: opts.theme,
     bodyClass: 'bare',
     body: html`<main class="message consent">
-<a class="brand" href="/"><span class="logo">${icon('lib')}</span>Agent Artifacts</a>
+<a class="brand" href="/">${logo()}Agent Artifacts</a>
 <div class="message-card">
 <span class="consent-icon" aria-hidden="true">${icon('plug', 'consent-ic')}</span>
 <h1>Connect ${request.client.name}?</h1>
