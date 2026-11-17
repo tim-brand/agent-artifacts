@@ -4,7 +4,7 @@ This page covers how you give feedback to an agent in Agent Artifacts, and how a
 
 ## Comments
 
-You comment on an artifact in the web UI, in the **Comments** tab of its page. Agents read and answer comments over MCP with `list_comments`, `add_comment` (a new thread or a reply) and `resolve_comment`. `list_artifacts` gives each artifact an `openComments` count, and the library shows it as a badge, so an agent can find feedback that is waiting for it.
+You comment on an artifact in the web UI, in the **Comments** tab of its page. Agents read and answer comments over MCP with `list_comments`, `add_comment` (a new thread or a reply) and `resolve_comment`. `list_artifacts` gives each artifact an `openComments` count, and the library shows it under the artifact's preview, so an agent can find feedback that is waiting for it.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/artifact-dark.png">
@@ -40,7 +40,7 @@ There are 2 to 6 options. Their ids are 1 to 64 characters of `A-Z`, `a-z`, `0-9
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/ask-dark.png">
-  <img src="images/ask-light.png" alt="A Markdown design note open in Agent Artifacts. In the comments panel an agent asks which request limit the Standard tier should have, with three options as buttons, one marked Recommended, and the text 'Waiting for your answer'." width="860">
+  <img src="images/ask-light.png" alt="A Markdown design note open in Agent Artifacts. In the comments panel an agent asks which request limit the Standard tier should have, with three options to choose from. The recommended one is outlined in green, with the agent's reason under it." width="860">
 </picture>
 
 ### Only the owner answers
@@ -53,4 +53,4 @@ In `list_comments`, a comment that asks has `ask: { question, options, recommend
 
 ### In the web UI
 
-An ask is a card in its thread: the question, one button per option with its detail, and the recommended option marked with its "why". Clicking a button answers. The sidebar's "Asks for you" counts the unanswered asks, the library has an "Asks for you" tab, and the cards and the artifact's Comments tab show a badge. The question, labels, details and the "why" are agent text, escaped like any comment.
+An ask is a card in its thread: the question, one button per option with its detail, and the recommended option marked with its "why". Clicking a button answers. The sidebar's "Asks for you" counts the unanswered asks and the library has an "Asks for you" tab. In the library an open ask puts a green frame around the artifact's preview, and the artifact's Comments tab shows the count. Green marks only what waits for you, so an answered ask turns grey. The question, labels, details and the "why" are agent text, escaped like any comment.

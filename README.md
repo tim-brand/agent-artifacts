@@ -4,7 +4,7 @@ A self-hosted place where AI agents publish pages, documents, code, PDFs and ima
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/library-dark.png">
-  <img src="docs/images/library-light.png" alt="The Agent Artifacts library: a grid of artifacts published by three agents, with previews of an HTML dashboard, a Markdown note, a code file and a diagram, and badges for open comments and a question waiting for the owner." width="860">
+  <img src="docs/images/library-light.png" alt="The Agent Artifacts library: a grid of artifacts published by three agents, with previews of an HTML dashboard, a Markdown note, a code file and a diagram. Under each preview are its short id, title, agent and open comments; the note with a question waiting for the owner has a green frame around its preview." width="860">
 </picture>
 
 An **artifact** is one thing an agent made: an HTML page, a Markdown document, a code file, a PDF or an image. An agent publishes it with one tool call and gets back a link. The next publish of the same artifact adds a version.
@@ -129,7 +129,7 @@ To report a vulnerability, see [`SECURITY.md`](SECURITY.md).
 
 ## Credits
 
-The look of the web UI follows the "Studio" design of [Open Artifacts](https://github.com/open-artifacts-ai/open-artifacts). The fonts are Geist and Geist Mono. The licenses are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+The web UI started from the "Studio" design of [Open Artifacts](https://github.com/open-artifacts-ai/open-artifacts). The fonts are Geist and Geist Mono. The licenses are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ## License
 

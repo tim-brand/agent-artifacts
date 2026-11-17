@@ -803,8 +803,16 @@ describe('library', () => {
       /href="\/\?agent=Claude\+%3CCode%3E"><span class="dot"><\/span><span class="label">Claude &lt;Code&gt;<\/span><span class="n">1<\/span>/,
     );
     assert.match(body, /<span class="agent">Claude &lt;Code&gt;<\/span>/);
-    assert.match(body, /<span class="pill cmt" title="2 open comment threads">.*2<\/span>/);
-    assert.match(body, /<span class="pill pub" title="1 public link">/);
+    assert.match(
+      body,
+      /<span class="flag comments" title="2 open comment threads">2 comments<\/span>/,
+    );
+    assert.match(body, /<span class="flag pub" title="1 public link">/);
+    // The short id before the title, from the artifact's own id.
+    assert.match(
+      body,
+      /<h2 class="ctitle"><span class="sid" title="i1">i1<\/span><a class="stretch" href="\/a\/i1">A chart<\/a><\/h2>/,
+    );
     assert.match(body, /<a class="btn" href="\/\?cursor=next-page">Load more<\/a>/);
     assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(res.headers.get('referrer-policy'), 'same-origin');
@@ -958,7 +966,10 @@ describe('search', () => {
     assert.ok(!body.includes('<img'));
     assert.ok(body.includes('value="&quot;onerror&quot;"'));
     assert.ok(body.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
-    assert.match(body, /<span class="pill cmt" title="2 open comment threads">/);
+    assert.match(
+      body,
+      /<span class="flag comments" title="2 open comment threads">2 comments<\/span>/,
+    );
     assert.match(body, /href="\/\?q=%22onerror%22&amp;cursor=more">More results/);
     assert.ok(!body.includes('A PDF'));
   });
@@ -1551,7 +1562,7 @@ describe('share links', () => {
     assert.ok(!page.includes('sl_secret1'));
     assert.match(
       page,
-      /<a class="pill pub" href="\/a\/a1\?panel=share" data-tab-link="share">.*1 public link<\/a>/,
+      /<a class="flag pub" href="\/a\/a1\?panel=share" data-tab-link="share">.*1 public link<\/a>/,
     );
     assert.match(page, /<small>Latest version · never expires · never opened · created/);
     assert.match(page, /action="\/a\/a1\/share\/l1\/revoke"/);
@@ -1872,9 +1883,16 @@ describe('asks', () => {
       /<a class="nav on" href="\/\?tab=asks" aria-current="page">.*Asks for you<\/span><span class="n attn">2<\/span><\/a>/,
     );
     assert.match(body, /<a class="nav" href="\/">.*Library/);
-    assert.match(body, /<span class="pill ask" title="1 ask waiting for your answer">/);
+    assert.match(
+      body,
+      /<span class="flag ask" title="1 ask waiting for your answer">1 ask<\/span>/,
+    );
+    // An open ask frames the card's preview; the others get no frame.
+    const framed = body.match(/<article class="card needs">[\s\S]*?<\/article>/g) ?? [];
+    assert.equal(framed.length, 1);
+    assert.match(framed[0] ?? '', /href="\/a\/a1"/);
 
     const list = await (await get(app, '/?view=list')).text();
-    assert.match(list, /<div class="row-pills"><span class="pill ask"/);
+    assert.match(list, /<div class="row-flags"><span class="flag ask"/);
   });
 });

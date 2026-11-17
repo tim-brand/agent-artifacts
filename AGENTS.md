@@ -74,7 +74,9 @@ These hold across the whole app. A change must not weaken them, and tests guard 
 
 ## UI
 
-- Server-rendered pages. The look follows Open Artifacts' "Studio" design (credit is in `THIRD_PARTY_NOTICES.md`). Use the tokens and components already in `app.css`, and don't add a client framework.
+- Server-rendered pages. The layout started from Open Artifacts' "Studio" design (credit is in `THIRD_PARTY_NOTICES.md`). Use the tokens and components already in `app.css`, and don't add a client framework.
+- One graphite ramp, and one green ink (`--accent` as text and fill, `--mark` as a stroke) for what waits on the owner: an open ask. Nothing else takes the ink: links are underlined text, focus rings use `--focus`, and states such as Live, Answered or the current version stay neutral. Amber (`--highlight`) is only for highlighted text, as in the frame; green and red only for diffs.
+- Counts, ids, versions and times are in Geist Mono. Keep the chrome quiet: no coloured pills, gradients or glows.
 - Pages work without JS where reasonable (e.g. panel tabs through `?panel=`); `app.js` enhances them.
 - Light and dark both have to work. The theme comes from a cookie or the system setting.
 - Icons are inline SVG symbols. Fonts are self-hosted. Nothing loads from a CDN.
