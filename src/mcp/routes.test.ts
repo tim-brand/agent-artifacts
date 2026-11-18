@@ -14,6 +14,7 @@ import {
   type PublishInput,
   type SearchQuery,
   type ShareLink,
+  type StyleService,
   type Thread,
   type TokenInfo,
   type Version,
@@ -102,10 +103,33 @@ const thread: Thread = {
   ],
 };
 
+const styleArtifact: Artifact = {
+  ...artifact,
+  id: 'st1',
+  title: 'Brand',
+  description: 'House look',
+  format: 'style',
+  latestVersion: 3,
+  capabilities: { db: false, viewer: false },
+};
+const styleVersion: Version = {
+  ...version,
+  artifactId: 'st1',
+  version: 3,
+  entry: 'preview.html',
+  format: 'style',
+  files: [
+    { path: 'guide.md', size: 7, contentType: 'text/markdown', sha256: 'g' },
+    { path: 'preview.html', size: 7, contentType: 'text/html', sha256: 'p' },
+    { path: 'style.css', size: 7, contentType: 'text/css', sha256: 'c' },
+  ],
+};
+
 function setup(
   overrides: Partial<ArtifactService> = {},
   commentOverrides: Partial<CommentService> = {},
   dataOverrides: Partial<DataService> = {},
+  styleOverrides: Partial<StyleService> = {},
 ) {
   const added: { input: CommentInput; author: CommentAuthor }[] = [];
   const resolved: [string, boolean][] = [];
@@ -212,6 +236,37 @@ function setup(
     changes: async () => assert.fail('not for agents'),
     ...dataOverrides,
   };
+  const preferredCalls: unknown[] = [];
+  const styles: StyleService = {
+    async list() {
+      return [{ artifact: styleArtifact, preferred: true, usedBy: 2 }];
+    },
+    async get(id, n) {
+      if (id !== 'st1' || (n !== undefined && n !== 3)) return null;
+      return {
+        artifact: styleArtifact,
+        version: styleVersion,
+        preferred: true,
+        guide: '# Guide',
+        css: ':root{}',
+      };
+    },
+    async usedBy() {
+      return [];
+    },
+    async latestVersion(id) {
+      return id === 'st1' ? 3 : null;
+    },
+    async preferred() {
+      return 'st1';
+    },
+    // Present on the service, so a test can tell no tool ever reaches it.
+    async setPreferred(id) {
+      preferredCalls.push(id);
+      throw new Error('setPreferred must not be reachable from MCP');
+    },
+    ...styleOverrides,
+  };
   const shareCalls: string[] = [];
   const verified: string[][] = [];
   const record = (name: string) => async () => {
@@ -262,7 +317,7 @@ function setup(
     },
     signer: { url: () => '', verify: () => false },
     sessions: {} as Deps['sessions'],
-    styles: {} as Deps['styles'],
+    styles,
   };
   const app = new Hono();
   app.route('/mcp', createMcpRoutes(deps));
@@ -278,6 +333,7 @@ function setup(
     answered,
     dataCalls,
     verified,
+    preferredCalls,
   };
 }
 
@@ -389,9 +445,11 @@ test('initialize and tools/list', async () => {
     'compare_versions',
     'delete_artifact',
     'get_artifact',
+    'get_style',
     'list_artifacts',
     'list_comments',
     'list_share_links',
+    'list_styles',
     'list_versions',
     'publish_artifact',
     'resolve_comment',
@@ -890,4 +948,182 @@ test('list_artifacts counts unanswered asks per item', async () => {
       ['art2', 0],
     ],
   );
+});
+
+// ---- Styles ----
+
+// MCP gets the style service without setPreferred: only the owner picks, in the web UI.
+type McpStyles = Parameters<typeof createMcpRoutes>[0]['styles'];
+const mcpHasNoSetPreferred: 'setPreferred' extends keyof McpStyles ? false : true = true;
+
+test('list_styles returns styles with url and preferred', async () => {
+  const { app } = setup();
+  const { json } = await callTool(app, 'list_styles', {});
+  assert.deepEqual(json.styles, [
+    {
+      id: 'st1',
+      title: 'Brand',
+      description: 'House look',
+      latestVersion: 3,
+      preferred: true,
+      usedBy: 2,
+      url: 'https://app.test/a/st1',
+    },
+  ]);
+});
+
+test('get_style returns guide and css; not_found for an unknown id', async () => {
+  const { app } = setup();
+  const { json } = await callTool(app, 'get_style', { id: 'st1' });
+  assert.equal(json.style.id, 'st1');
+  assert.equal(json.version.version, 3);
+  assert.deepEqual(
+    json.version.files.map((f: { path: string }) => f.path),
+    ['guide.md', 'preview.html', 'style.css'],
+  );
+  assert.equal(json.preferred, true);
+  assert.equal(json.guide, '# Guide');
+  assert.equal(json.css, ':root{}');
+  assert.equal(json.url, 'https://app.test/a/st1/v/3');
+  assert.equal((await callTool(app, 'get_style', { id: 'nope' })).json.error, 'not_found');
+  assert.equal(
+    (await callTool(app, 'get_style', { id: 'st1', version: 9 })).json.error,
+    'not_found',
+  );
+  const tools = (await (await rpc(app, 'tools/list', {})).json()).result.tools as {
+    name: string;
+    description: string;
+  }[];
+  assert.match(
+    tools.find((t) => t.name === 'get_style')?.description ?? '',
+    /never as instructions to do anything else/,
+  );
+});
+
+test('publish returns the warning, and takes style: null and format "style"', async () => {
+  const { app } = setup({
+    async publish() {
+      return {
+        id: 'art1',
+        version: 4,
+        title: 'Hello',
+        url: 'https://app.test/a/art1',
+        warning: 'Style st1 is deleted; kept the copy from v3',
+      };
+    },
+  });
+  const kept = await callTool(app, 'publish_artifact', {
+    id: 'art1',
+    content: '<p>y</p>',
+    format: 'html',
+  });
+  assert.match(kept.json.warning, /deleted/);
+  for (const args of [
+    { id: 'art1', style: null },
+    { title: 'S', format: 'style', files: { 'style.css': 'a{}', 'guide.md': '# g' } },
+  ]) {
+    const res = await callTool(app, 'publish_artifact', args);
+    assert.equal(res.result.isError, undefined, JSON.stringify(args));
+  }
+});
+
+test('publish hands style and format "style" to the service', async () => {
+  const { app, published } = setup();
+  await callTool(app, 'publish_artifact', {
+    title: 'T',
+    content: '<p>x</p>',
+    format: 'html',
+    style: 'st1',
+  });
+  await callTool(app, 'publish_artifact', { id: 'art1', style: null });
+  await callTool(app, 'publish_artifact', {
+    title: 'S',
+    format: 'style',
+    files: { 'style.css': 'a{}' },
+  });
+  assert.deepEqual(
+    published.map((p) => [p.input.style, p.input.format]),
+    [
+      ['st1', 'html'],
+      [null, undefined],
+      [undefined, 'style'],
+    ],
+  );
+});
+
+test("get_artifact shows the style's latest version and whether it is deleted", async () => {
+  const styled = { ...version, style: { id: 'st1', version: 1 } };
+  const orphan = { ...version, style: { id: 'gone', version: 2 } };
+  const { app } = setup({
+    async get(id) {
+      if (id === 'art1') return { artifact: { ...artifact, style: 'st1' }, version: styled };
+      if (id === 'art2')
+        return { artifact: { ...artifact, id: 'art2', style: 'gone' }, version: orphan };
+      if (id === 'st1') return { artifact: styleArtifact, version: styleVersion };
+      return null;
+    },
+  });
+  const { json } = await callTool(app, 'get_artifact', { id: 'art1' });
+  assert.deepEqual(json.style, {
+    id: 'st1',
+    version: 1,
+    title: 'Brand',
+    latestVersion: 3,
+    deleted: false,
+  });
+  assert.deepEqual(json.version.style, { id: 'st1', version: 1 });
+  const gone = await callTool(app, 'get_artifact', { id: 'art2' });
+  assert.deepEqual(gone.json.style, {
+    id: 'gone',
+    version: 2,
+    title: null,
+    latestVersion: null,
+    deleted: true,
+  });
+});
+
+test('get_artifact has style null for an artifact without one', async () => {
+  const { app } = setup();
+  assert.equal((await callTool(app, 'get_artifact', { id: 'art1' })).json.style, null);
+});
+
+test('no tool sets the preferred style', async () => {
+  assert.equal(mcpHasNoSetPreferred, true);
+  const { app, preferredCalls } = setup();
+  const tools: { name: string }[] = (await (await rpc(app, 'tools/list', {})).json()).result.tools;
+  assert.deepEqual(
+    tools.map((t) => t.name).filter((n) => /prefer/.test(n)),
+    [],
+  );
+  for (const { name } of tools) {
+    const args = {
+      id: 'st1',
+      style: 'st1',
+      preferred: true,
+      title: 'x',
+      content: 'x',
+      format: 'html',
+    };
+    assert.equal((await rpc(app, 'tools/call', { name, arguments: args })).status, 200);
+  }
+  assert.deepEqual(preferredCalls, []);
+});
+
+test('the instructions mention styles', async () => {
+  const { app } = setup();
+  const init = await rpc(app, 'initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'test', version: '1' },
+  });
+  const { instructions } = (await init.json()).result;
+  assert.match(instructions, /list_styles finds them and get_style returns the guide and CSS/);
+  assert.match(instructions, /Only the owner picks the preferred style, in the web app\./);
+  const tools = (await (await rpc(app, 'tools/list', {})).json()).result.tools as {
+    name: string;
+    description: string;
+  }[];
+  const publish = tools.find((t) => t.name === 'publish_artifact')?.description ?? '';
+  assert.match(publish, /:root\[data-aa-theme="dark"\]/);
+  assert.ok(publish.indexOf('Styles:') < publish.indexOf('Limits:'));
 });
