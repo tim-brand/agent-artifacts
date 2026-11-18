@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import type {
   Artifact,
@@ -507,6 +508,28 @@ test('the bridge script is served unsigned, talking only to the app origin', asy
   assert.match(js, /event\.source !== window\.parent \|\| event\.origin !== APP_ORIGIN/);
   assert.equal((await get(`${CONTENT}/_aa/bridge.js`, { method: 'POST' })).status, 404);
   assert.equal((await get(`${CONTENT}/_aa/other.js`)).status, 404);
+});
+
+test("the app's fonts are served unsigned, for styles to use", async () => {
+  for (const [name, type] of [
+    ['Geist-Variable.woff2', 'font/woff2'],
+    ['GeistMono-Variable.woff2', 'font/woff2'],
+    ['OFL.txt', 'text/plain; charset=utf-8'],
+  ]) {
+    const res = await get(`${CONTENT}/_aa/fonts/${name}`);
+    assert.equal(res.status, 200, name);
+    assert.equal(res.headers.get('content-type'), type);
+    assert.equal(res.headers.get('cache-control'), 'public, max-age=86400');
+    // A sandboxed page's font load is a CORS request with Origin: null.
+    assert.equal(res.headers.get('access-control-allow-origin'), '*');
+    assertSafeHeaders(res);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const disk = readFileSync(new URL(`../ui/static/fonts/${name}`, import.meta.url));
+    assert.deepEqual(bytes, new Uint8Array(disk));
+  }
+  for (const bad of ['other.woff2', '..%2Fbridge.js', 'Geist-Variable.woff2.bak', '']) {
+    assert.equal((await get(`${CONTENT}/_aa/fonts/${bad}`)).status, 404, bad);
+  }
 });
 
 // ---- Styles ----

@@ -1126,6 +1126,7 @@ test('the instructions mention styles', async () => {
   const publish = tools.find((t) => t.name === 'publish_artifact')?.description ?? '';
   assert.match(publish, /:root\[data-aa-theme="dark"\]/);
   assert.ok(publish.indexOf('Styles:') < publish.indexOf('Limits:'));
+  assert.match(publish, /\/_aa\/fonts\/Geist-Variable\.woff2/);
   // Edits work on a style's entry too.
   assert.match(publish, /latest version's entry file \(html, markdown, code or style\)/);
 });

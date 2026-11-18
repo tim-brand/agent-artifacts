@@ -383,6 +383,7 @@ export function docsStylesPage(opts: { shell: Shell }): Html {
 <li><code>preview.html</code>, optional: a specimen page that shows each part. The app shows it as the style's page; without one, it shows the guide.</li>
 <li>Fonts or images that <code>style.css</code> references by a relative path.</li>
 </ul>
+<p>The app's own fonts need no files: use <code>url("/_aa/fonts/Geist-Variable.woff2")</code> and <code>url("/_aa/fonts/GeistMono-Variable.woff2")</code> in <code>@font-face</code>. Both are variable fonts (weights 100 to 900) under the SIL Open Font License.</p>
 ${block('style-publish', publish)}
 <p>A style has versions like any artifact. A new version of a style stays a style, and no other artifact can become one.</p>
 <h2>Using a style</h2>

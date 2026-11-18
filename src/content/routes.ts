@@ -15,6 +15,8 @@ import { escapeHtml, renderCode, renderImage, renderMarkdown } from './render.ts
  * - only the app origin may frame /s/, and nothing may frame /p/;
  * - nothing here ever sets a cookie.
  *
+ * Besides artifacts it serves only the app's fonts (/_aa/fonts/) and the bridge.
+ *
  * The one script this host adds to a page is the bridge (/_aa/bridge.js): on html and markdown
  * entries under /s/, the links the app's artifact page frames, and on public (/p/) html entries of
  * an artifact that declares capabilities. In the app's frame it lets the reader comment on a
@@ -64,6 +66,23 @@ type Target = { exp: number; sig: string; id: string; version: number; path: str
 const BRIDGE_PATH = '/_aa/bridge.js';
 const BRIDGE_SOURCE = readFileSync(new URL('./bridge.js', import.meta.url), 'utf8');
 
+/**
+ * The app's own fonts (SIL OFL 1.1), so a style can use them by URL instead of carrying them:
+ * `url("/_aa/fonts/Geist-Variable.woff2")`. Only these files, read once at startup.
+ */
+const FONTS = new Map<string, { type: string; bytes: Buffer }>(
+  (
+    [
+      ['Geist-Variable.woff2', 'font/woff2'],
+      ['GeistMono-Variable.woff2', 'font/woff2'],
+      ['OFL.txt', 'text/plain; charset=utf-8'],
+    ] as const
+  ).map(([name, type]) => [
+    name,
+    { type, bytes: readFileSync(new URL(`../ui/static/fonts/${name}`, import.meta.url)) },
+  ]),
+);
+
 export function createContentRoutes(deps: Deps): Hono {
   const app = new Hono();
   const { appOrigin, trustedProxies } = deps.config;
@@ -89,6 +108,16 @@ export function createContentRoutes(deps: Deps): Hono {
     const policy = { ...signed, cacheControl: 'public, max-age=86400' };
     return new Response(bridgeSource, {
       headers: securityHeaders('text/javascript; charset=utf-8', policy),
+    });
+  });
+
+  // Unsigned like the bridge: the same files for everyone, and none of them an artifact's.
+  app.get('/_aa/fonts/:name', (c) => {
+    const font = FONTS.get(c.req.param('name'));
+    if (!font) return error(404, 'Not found');
+    const policy = { ...signed, cacheControl: 'public, max-age=86400' };
+    return new Response(new Uint8Array(font.bytes), {
+      headers: securityHeaders(font.type, policy),
     });
   });
 

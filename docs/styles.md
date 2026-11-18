@@ -13,6 +13,12 @@ A style is an artifact with the format `style`. It is published with `files`:
 - `preview.html` (optional): a specimen page that shows each part. It is the style's entry, so the app shows it on the style's page; without it, the entry is `guide.md`.
 - Any fonts or images that `style.css` references by a relative path.
 
+The app's own fonts, Geist and Geist Mono, need no files: the content host serves them at `/_aa/fonts/Geist-Variable.woff2` and `/_aa/fonts/GeistMono-Variable.woff2` (variable weights 100 to 900, SIL Open Font License, license at `/_aa/fonts/OFL.txt`). Use them in `style.css`:
+
+```css
+@font-face { font-family: "Geist"; src: url("/_aa/fonts/Geist-Variable.woff2") format("woff2"); font-weight: 100 900; }
+```
+
 ```json
 {
   "title": "House style",
