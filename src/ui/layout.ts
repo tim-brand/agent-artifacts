@@ -58,7 +58,15 @@ export function contentSecurityPolicy(contentOrigin: string, formTargets: string
 export type Theme = 'light' | 'dark' | 'system';
 export const THEMES: readonly Theme[] = ['light', 'dark', 'system'];
 
-export type Nav = 'library' | 'asks' | 'trash' | 'connections' | 'connect' | 'docs' | null;
+export type Nav =
+  | 'library'
+  | 'asks'
+  | 'trash'
+  | 'connections'
+  | 'connect'
+  | 'docs'
+  | 'docs-styles'
+  | null;
 
 /** What every page of the app shell needs. */
 export type Shell = {
@@ -238,6 +246,7 @@ ${agents.length ? html`<div class="group">Agents</div>${agents}` : ''}
 ${nav('/settings/connections', 'Connections', 'key', shell.nav === 'connections')}
 ${nav('/connect', 'Connect an agent', 'plug', shell.nav === 'connect')}
 ${nav('/docs/runtime', 'Live pages docs', 'book', shell.nav === 'docs')}
+${nav('/docs/styles', 'Styles docs', 'style', shell.nav === 'docs-styles')}
 </nav>
 <div class="who">
 <div class="who-row"><span class="av" aria-hidden="true">${initials(shell.name)}</span><span class="who-text"><span class="who-name">${shell.name}</span>${shell.name === shell.user ? '' : html`<small>${shell.user}</small>`}</span></div>

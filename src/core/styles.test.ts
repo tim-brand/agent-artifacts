@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { type TestContext, test } from 'node:test';
 import type { Config } from '../config.ts';
 import { AppError, LIMITS, type PublishInput } from '../contracts.ts';
+import { SAMPLE_STYLE } from '../ui/docs.ts';
 import { createCore } from './index.ts';
 
 function setup(t: TestContext) {
@@ -511,4 +512,23 @@ test('a preferred style in the trash counts as none', async (t) => {
   await assert.rejects(styles.setPreferred(s.id), code('not_found'));
   await artifacts.undelete(s.id);
   assert.equal(await styles.preferred(), s.id);
+});
+
+test('the sample style publishes as it is', async (t) => {
+  const { artifacts, styles } = setup(t);
+  const s = await artifacts.publish({ title: 'Sample', format: 'style', files: SAMPLE_STYLE }, 'a');
+  const got = await styles.get(s.id);
+  assert.equal(got?.version.entry, 'preview.html');
+  assert.equal(got?.css, SAMPLE_STYLE['style.css']);
+  // Light and dark the way the publish tool describes.
+  assert.match(got?.css ?? '', /@media \(prefers-color-scheme: dark\)/);
+  assert.match(got?.css ?? '', /:root:not\(\[data-aa-theme="light"\]\)/);
+  assert.match(got?.css ?? '', /:root\[data-aa-theme="dark"\]/);
+  // Every class the guide documents is in the stylesheet, and the preview shows it.
+  const documented = [...(got?.guide ?? '').matchAll(/`\.([a-z][a-z0-9-]*)`/g)].map((m) => m[1]);
+  assert.ok(documented.length >= 4, String(documented));
+  for (const name of documented) {
+    assert.match(got?.css ?? '', new RegExp(`\\.${name}\\b`), name);
+    assert.match(SAMPLE_STYLE['preview.html'], new RegExp(`class="[^"]*\\b${name}\\b`), name);
+  }
 });

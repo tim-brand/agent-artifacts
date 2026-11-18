@@ -40,8 +40,8 @@ curl -s http://localhost:3000/mcp \
 
 | Tool | Purpose |
 | --- | --- |
-| `publish_artifact` | A new artifact or version from `content` or `files`, or small `edits` (`[{ old, new }]`) to the latest version's entry file. Without content: title, description or capabilities only. |
-| `get_artifact` | Metadata, one version and its files, and the entry text inline (up to 1 MB). |
+| `publish_artifact` | A new artifact or version from `content` or `files`, or small `edits` (`[{ old, new }]`) to the latest version's entry file. Without content: title, description or capabilities only. `style` sets the artifact's style. |
+| `get_artifact` | Metadata, one version and its files, the entry text inline (up to 1 MB), and the version's `style` with the style's latest version. |
 | `list_artifacts` | Most recently updated first, paged with `cursor`. Each item has `openComments` and `openAsks`. |
 | `search_artifacts` | Full-text search, best match first. See [Search](search.md). |
 | `list_versions` | All versions of an artifact, newest first. |
@@ -59,8 +59,10 @@ curl -s http://localhost:3000/mcp \
 | `artifact_data_set` | Creates or replaces a document, for example to seed a checklist. |
 | `artifact_data_update` | Merges fields into a document's top level. |
 | `artifact_data_delete` | Deletes a document. |
+| `list_styles` | Styles, the owner's preferred one first, with how many artifacts use each. See [Styles](styles.md). |
+| `get_style` | One style version, with its guide and CSS as text. |
 
-The tool descriptions are written for agents and tell them these rules too. There is no tool that creates or revokes a public link, and none that answers an ask: both are decisions that only the signed-in person makes in the web UI.
+The tool descriptions are written for agents and tell them these rules too. There is no tool that creates or revokes a public link, none that answers an ask, and none that sets the preferred style: these are decisions that only the signed-in person makes in the web UI.
 
 ### Formats
 
@@ -70,6 +72,7 @@ The tool descriptions are written for agents and tell them these rules too. Ther
 - `markdown`: shown as a page.
 - `code`: shown with syntax highlighting. Set `language` (for example `ts` or `python`).
 - `pdf`: `content` is base64.
+- `style`: a shared stylesheet, published with `files`: `style.css`, `guide.md` and optionally `preview.html`. See [Styles](styles.md).
 - `image`: one PNG, JPEG, GIF, WebP or SVG file. Pass `content` as base64 (an SVG may be its text), and either `entry` as a file name such as `chart.png` or `language` as the extension. The bytes must match the extension, or the publish is refused. On the content host the entry opens as a page that centers the image, and `?raw=1` returns the file itself. SVG can carry script, so like every other non-PDF response it gets the CSP sandbox.
 
 With a single `content`, the file is stored as `index.html`, `README.md`, `main.<ext>` or `document.pdf`. With `files` (a map from a relative path to its text, or to `{ "base64": "..." }` for binary files) you publish several files and name the one to open with `entry`; relative links between files in an HTML artifact work. The entry of a Markdown, code or image artifact is shown as a page; add `?raw=1` to its address for the file itself.
@@ -83,6 +86,8 @@ Each publish with an existing `id` adds a version; older versions stay readable.
 `restore_version` makes an old version the latest again by publishing a copy as a new version. The version it replaces stays readable.
 
 A publish with only `id` and `title`, `description` or `capabilities` changes those without making a version.
+
+`style` is a style's id for an html or markdown artifact, or `null` for none; without it, the artifact keeps its style. Every new version gets the style's latest version, as a copy under `_style/` that the entry links. A publish with only `id` and `style` makes a new version with the same files and the style's latest version, or nothing when it already has it. When the artifact's style was deleted, a new version keeps its copy and the result carries a `warning`. See [Styles](styles.md).
 
 ### Trash
 

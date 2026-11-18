@@ -15,7 +15,7 @@ import { createPasswordChecker, type PasswordChecker } from '../core/passwords.t
 import { PUBLIC_OAUTH_PATHS } from '../oauth/rules.ts';
 import { createApiRoutes } from './api.ts';
 import { MAX_EMAIL, safeNext } from './auth.ts';
-import { docsRuntimePage } from './docs.ts';
+import { docsRuntimePage, docsStylesPage } from './docs.ts';
 import {
   contentSecurityPolicy,
   messageDocument,
@@ -767,6 +767,9 @@ export function createUiRoutes(deps: Deps, options: UiOptions = {}): Hono {
   );
 
   ui.get('/docs/runtime', async (c) => c.html(docsRuntimePage({ shell: await shell(c, 'docs') })));
+  ui.get('/docs/styles', async (c) =>
+    c.html(docsStylesPage({ shell: await shell(c, 'docs-styles') })),
+  );
 
   ui.route('/api', createApiRoutes(deps));
 

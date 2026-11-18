@@ -2049,3 +2049,26 @@ describe('styles', () => {
     }
   });
 });
+
+describe('styles docs', () => {
+  it('GET /docs/styles renders the sample style escaped', async () => {
+    const { app } = fakeDeps({});
+    const res = await get(app, '/docs/styles');
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.match(body, /<h1>Styles<\/h1>/);
+    for (const id of ['sample-style-css', 'sample-style-guide', 'sample-style-preview']) {
+      assert.match(body, new RegExp(`<code id="${id}">`), id);
+      assert.match(body, new RegExp(`data-copy="${id}"`), id);
+    }
+    assert.ok(body.includes('&lt;!doctype html&gt;'));
+    assert.ok(!body.includes('<p class="card'));
+    assert.match(body, /data-aa-theme/);
+    // Its own sidebar link is the current one, and the live pages link isn't.
+    assert.match(body, /<a class="nav[^"]*" href="\/docs\/styles" aria-current="page">/);
+    assert.doesNotMatch(body, /href="\/docs\/runtime" aria-current="page"/);
+    const runtime = await (await get(app, '/docs/runtime')).text();
+    assert.match(runtime, /href="\/docs\/styles"/);
+    assert.doesNotMatch(runtime, /href="\/docs\/styles" aria-current="page"/);
+  });
+});
