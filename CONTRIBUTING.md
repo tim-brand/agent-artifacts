@@ -38,9 +38,9 @@ For anything bigger than a small fix, open an issue first so we can agree on the
 ## Releasing (maintainers)
 
 1. Set `version` in `package.json` in a pull request and merge it. Wait until the `Build & push image` workflow has pushed the image of that commit.
-2. Tag that commit and push the tag: `git tag v0.5.0 && git push origin v0.5.0`.
+2. Tag that commit and push the tag: `git tag v0.6.0 && git push origin v0.6.0`.
 
-The `Release` workflow then gives that image the tag `0.5.0` and creates the GitHub release with generated notes. It fails when the tag and `package.json` disagree, or when the commit has no image.
+The `Release` workflow then gives that image the tag `0.6.0` and creates the GitHub release with generated notes. It fails when the tag and `package.json` disagree, or when the commit has no image.
 
 ## License
 
