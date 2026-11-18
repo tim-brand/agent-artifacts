@@ -1854,6 +1854,13 @@ iframe.cmp-frame {
   flex: none;
   font-size: 12px;
 }
+/* A style's "Preferred style" row: Yes or No, then the button that flips it. */
+.pref-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
 .rename {
   margin-top: 20px;
   padding-top: 16px;

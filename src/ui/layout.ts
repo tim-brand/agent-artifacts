@@ -91,6 +91,8 @@ const ICONS: Record<string, string> = {
   code: '<path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5zM9.5 1.5V5H13M6.5 8 5 9.5 6.5 11M9.5 8 11 9.5 9.5 11"/>',
   image: '<path d="M2 3h12v10H2zM2 11l3.5-3.5 3 3 2-2L14 12"/><circle cx="10.5" cy="6" r="1"/>',
   pdf: '<path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5zM9.5 1.5V5H13M5.5 10h5M5.5 12h3"/>',
+  style:
+    '<path d="M2.5 2.5h4v11h-4zM6.5 5.5l3.25-2.75 3.5 4-6.75 6.25M6.5 9.5h7v4h-7"/><path d="M4.5 11h.01"/>',
   live: '<circle cx="8" cy="8" r="2"/><path d="M4.5 4.5a5 5 0 0 0 0 7M11.5 4.5a5 5 0 0 1 0 7"/>',
   globe: '<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/>',
   cmt: '<path d="M2.5 3h11v7.5h-6l-3 2.5v-2.5h-2z"/>',

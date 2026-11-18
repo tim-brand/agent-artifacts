@@ -17,6 +17,8 @@ import {
   type OAuthGrant,
   type SearchHit,
   type ShareLink,
+  type StyleRef,
+  type StyleUse,
   type Thread,
   type TokenInfo,
   TRASH_DAYS,
@@ -37,7 +39,7 @@ import {
   themeSwitch,
 } from './layout.ts';
 
-export const FORMATS: readonly Format[] = ['html', 'markdown', 'code', 'image', 'pdf'];
+export const FORMATS: readonly Format[] = ['html', 'markdown', 'code', 'image', 'pdf', 'style'];
 
 export const FORMAT_LABELS: Record<Format, string> = {
   html: 'HTML',
@@ -126,6 +128,8 @@ const publicFlag = (n: number) =>
   n
     ? html`<span class="flag pub" title="${plural(n, 'public link')}">${icon('globe')}Public</span>`
     : '';
+/** The owner's preferred style: neutral, like the other flags. */
+const preferredFlag = (on: boolean) => (on ? html`<span class="flag pref">Preferred</span>` : '');
 
 // ---- Library ----
 
@@ -174,7 +178,7 @@ const menu = (summary: Html, items: Html, opts: { right?: boolean; label?: strin
 const menuItem = (href: string, label: string | Html, on: boolean) =>
   html`<a class="menu-item${on ? ' on' : ''}" href="${href}"${current(on)}>${label}</a>`;
 
-function card(item: LibraryItem, preview: string | null): Html {
+function card(item: LibraryItem, preview: string | null, preferred: boolean): Html {
   const a = item.artifact;
   const thumb = preview
     ? html`<div class="thumb"><div class="mini"><iframe src="${preview}" sandbox="" loading="lazy" tabindex="-1" aria-hidden="true" title=""></iframe></div></div>`
@@ -183,19 +187,19 @@ function card(item: LibraryItem, preview: string | null): Html {
   return html`<article class="card${item.openAsks ? ' needs' : ''}">
 ${thumb}
 <h2 class="ctitle">${shortId(a.id)}<a class="stretch" href="/a/${encodeURIComponent(a.id)}">${a.title}</a></h2>
-<div class="meta"><span class="agent">${item.agent}</span>${asksFlag(item.openAsks)}${commentsFlag(item.openComments)}${liveFlag(a)}${publicFlag(item.publicLinks)}<span class="t">${time(a.updatedAt)}</span></div>
+<div class="meta"><span class="agent">${item.agent}</span>${preferredFlag(preferred)}${asksFlag(item.openAsks)}${commentsFlag(item.openComments)}${liveFlag(a)}${publicFlag(item.publicLinks)}<span class="t">${time(a.updatedAt)}</span></div>
 </article>`;
 }
 
 const subline = (a: Artifact) =>
   `${a.description.split('\n')[0]?.trim() || FORMAT_LABELS[a.format]} · v${a.latestVersion}`;
 
-function row(item: LibraryItem): Html {
+function row(item: LibraryItem, preferred: boolean): Html {
   const a = item.artifact;
   return html`<article class="row">
 ${formatIcon(a.format)}
 <div class="row-main"><a class="ttl stretch" href="/a/${encodeURIComponent(a.id)}">${a.title}</a><div class="sub">${subline(a)}</div></div>
-<div class="row-flags">${asksFlag(item.openAsks)}${commentsFlag(item.openComments)}${liveFlag(a)}${publicFlag(item.publicLinks)}</div>
+<div class="row-flags">${preferredFlag(preferred)}${asksFlag(item.openAsks)}${commentsFlag(item.openComments)}${liveFlag(a)}${publicFlag(item.publicLinks)}</div>
 <div class="sub row-agent">${item.agent}</div>
 <div class="sub t">${time(a.updatedAt)}</div>
 </article>`;
@@ -209,6 +213,8 @@ export function libraryPage(opts: {
   counts: Record<LibraryTab, number>;
   /** Signed URL of an item's entry for its preview, or null for the format tile. */
   preview: (item: LibraryItem) => string | null;
+  /** The owner's preferred style, marked on its card or row. */
+  preferredStyle: string | null;
 }): Html {
   const { state, counts } = opts;
   const filtered = Boolean(state.format || state.agent);
@@ -275,8 +281,8 @@ ${sortMenu}${viewToggle}
     opts.items.length === 0
       ? empty
       : state.view === 'grid'
-        ? html`<div class="grid">${opts.items.map((item) => card(item, opts.preview(item)))}</div>`
-        : html`<div class="list">${opts.items.map(row)}</div>`;
+        ? html`<div class="grid">${opts.items.map((item) => card(item, opts.preview(item), item.artifact.id === opts.preferredStyle))}</div>`
+        : html`<div class="list">${opts.items.map((item) => row(item, item.artifact.id === opts.preferredStyle))}</div>`;
 
   const more = opts.nextCursor
     ? html`<p class="more"><a class="btn" href="${libraryHref(state, { cursor: opts.nextCursor })}">Load more</a></p>`
@@ -348,6 +354,10 @@ export function artifactPage(opts: {
   panel: { tab: PanelTab; open: boolean };
   /** Shown once in the Details tab after a rename, or a refused one. */
   notice?: string;
+  /** The style this version uses: its title and latest version, both null once it is deleted. */
+  style?: StyleStatus | null;
+  /** For a style: whether it is the preferred one, and the artifacts that use it. */
+  styleInfo?: StyleInfo;
 }): Html {
   const { artifact: a, version: v } = opts;
   const id = encodeURIComponent(a.id);
@@ -424,7 +434,7 @@ ${moreMenu}
 ${pane('versions', versionsPane(a, v, opts.versions))}
 ${pane('comments', commentsPane(a, v, opts.threads, opts.user, opts.name))}
 ${pane('share', sharePane(a, v, opts.shareLinks, opts.createdLink))}
-${pane('details', detailsPane(a, v, opts.versions, opts.url, opts.notice))}
+${pane('details', detailsPane(a, v, opts.versions, opts.url, opts.notice, opts.style, opts.styleInfo))}
 </aside>`;
 
   return htmlPage({
@@ -657,18 +667,53 @@ ${EXPIRY_CHOICES.map(([value, label]) => html`<option value="${value}">${label}<
 ${links.length === 0 ? html`<p class="note">No public links.</p>` : html`<ul class="links">${links.map(describe)}</ul>`}`;
 }
 
+export type StyleStatus = { ref: StyleRef; title: string | null; latestVersion: number | null };
+export type StyleInfo = { preferred: boolean; usedBy: StyleUse[] };
+
+/** "v1 · latest v3" when `version` is behind `latest`, else "v1". */
+const styleVersion = (version: number, latest: number | null) =>
+  latest !== null && version < latest ? `v${version} · latest v${latest}` : `v${version}`;
+
+/** A styled version's style: linked, with its version, or the id once the style is deleted. */
+function styleRow(style: StyleStatus): Html {
+  const { ref, title, latestVersion } = style;
+  const value =
+    latestVersion === null
+      ? html`${ref.id} (deleted)`
+      : html`<a href="/a/${encodeURIComponent(ref.id)}">${title ?? ref.id}</a> ${styleVersion(ref.version, latestVersion)}`;
+  return html`<dt>Style</dt><dd>${value}</dd>`;
+}
+
+/** A style's rows: the owner's preferred style (set only here), and who uses it. */
+function styleInfoRows(a: Artifact, v: Version, info: StyleInfo): Html {
+  const id = encodeURIComponent(a.id);
+  const toggle = html`<form method="post" action="/a/${id}/preferred" class="pref-form">${info.preferred ? 'Yes' : 'No'}<input type="hidden" name="preferred" value="${info.preferred ? '0' : '1'}"><input type="hidden" name="version" value="${v.version}"><button class="btn sm" type="submit">${info.preferred ? 'Stop preferring' : 'Make preferred'}</button></form>`;
+  const users = info.usedBy.length
+    ? html`<ul class="files">${info.usedBy.map(
+        (u) =>
+          html`<li><a href="/a/${encodeURIComponent(u.artifact.id)}">${u.artifact.title}</a><span class="muted">${styleVersion(u.styleVersion, a.latestVersion)}</span></li>`,
+      )}</ul>`
+    : 'No artifacts yet';
+  return html`<dt>Preferred style</dt><dd>${toggle}</dd>
+<dt>Used by</dt><dd>${users}</dd>`;
+}
+
 function detailsPane(
   a: Artifact,
   v: Version,
   versions: Version[],
   url: (path: string) => string,
   notice?: string,
+  style?: StyleStatus | null,
+  styleInfo?: StyleInfo,
 ): Html {
   const id = encodeURIComponent(a.id);
   const first = versions.at(-1);
   const caps = (['db', 'viewer'] as const).filter((k) => a.capabilities[k]);
   return html`${notice ? html`<div class="notice">${notice}</div>` : ''}<dl class="details">
 <dt>Format</dt><dd>${FORMAT_LABELS[v.format]}</dd>
+${style ? styleRow(style) : ''}
+${styleInfo ? styleInfoRows(a, v, styleInfo) : ''}
 <dt>Entry</dt><dd class="mono">${v.entry}</dd>
 ${
   v.files.length > 1

@@ -120,7 +120,7 @@ export type UiOptions = {
 };
 
 export function createUiRoutes(deps: Deps, options: UiOptions = {}): Hono {
-  const { config, artifacts, comments, tokens, oauth, shareLinks, signer, sessions } = deps;
+  const { config, artifacts, comments, tokens, oauth, shareLinks, signer, sessions, styles } = deps;
   const csp = contentSecurityPolicy(config.contentOrigin);
   const secure = config.appOrigin.startsWith('https:');
   const passwordMode = config.authMode === 'password';
@@ -389,6 +389,7 @@ export function createUiRoutes(deps: Deps, options: UiOptions = {}): Hono {
         // Live previews: the entry in a frame without scripts. A PDF gets the format tile.
         preview: ({ artifact: a, entry }) =>
           a.format === 'pdf' ? null : signer.url(a.id, a.latestVersion, entry),
+        preferredStyle: await styles.preferred(),
       }),
     );
   });
@@ -417,6 +418,20 @@ export function createUiRoutes(deps: Deps, options: UiOptions = {}): Hono {
     if (!found || !versions || !links || !threads) return notFound(c);
     const { artifact, version } = found;
     const user = c.get('user');
+    const ref = version.style;
+    const styleLatest = ref ? await styles.latestVersion(ref.id) : null;
+    const style = ref
+      ? {
+          ref,
+          latestVersion: styleLatest,
+          title:
+            styleLatest === null ? null : ((await artifacts.get(ref.id))?.artifact.title ?? null),
+        }
+      : null;
+    const styleInfo =
+      artifact.format === 'style'
+        ? { preferred: (await styles.preferred()) === id, usedBy: await styles.usedBy(id) }
+        : undefined;
     return c.html(
       artifactPage({
         user,
@@ -433,6 +448,8 @@ export function createUiRoutes(deps: Deps, options: UiOptions = {}): Hono {
         shareLinks: links,
         createdLink: extra.created,
         panel: panelState(c, extra.tab),
+        style,
+        styleInfo,
       }),
     );
   };
@@ -494,6 +511,21 @@ export function createUiRoutes(deps: Deps, options: UiOptions = {}): Hono {
       { id, title: field(form, 'title'), description: field(form, 'description') },
       c.get('user'),
     );
+    return c.redirect(await artifactUrl(id, versionParam(field(form, 'version')), 'details'), 303);
+  });
+
+  // The owner's preferred style: set only here, never over MCP. preferred=0 clears it only when this
+  // style is the preferred one, so a stale page can't clear another style's choice.
+  ui.post('/a/:id/preferred', async (c) => {
+    const id = c.req.param('id');
+    const form = await c.req.parseBody();
+    const preferred = field(form, 'preferred');
+    if (preferred !== '1' && preferred !== '0') {
+      throw new AppError('invalid_input', 'preferred is 1 or 0');
+    }
+    if (preferred === '1') await styles.setPreferred(id);
+    else if ((await styles.preferred()) === id) await styles.setPreferred(null);
+    else if (!(await artifacts.get(id))) return notFound(c);
     return c.redirect(await artifactUrl(id, versionParam(field(form, 'version')), 'details'), 303);
   });
 
