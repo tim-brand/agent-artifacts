@@ -25,8 +25,38 @@ after(() => {
   }
 });
 
-function load(framed: boolean) {
+/**
+ * `styled`: the page has the content host's style link, from the start or (`linkLate`) only once
+ * the document has loaded, as on a rendered markdown page. `loading`: the document is still loading,
+ * so DOMContentLoaded comes later, through `loaded()`.
+ */
+function load(
+  framed: boolean,
+  page: { styled?: boolean; linkLate?: boolean; loading?: boolean } = {},
+) {
   const listeners: Record<string, (event: unknown) => void> = {};
+  const docListeners: Record<string, (() => void)[]> = {};
+  const attributes: [string, string][] = [];
+  /** Listeners for a change of the system's light or dark setting. */
+  const systemTheme: ((event: { matches: boolean }) => void)[] = [];
+  let linked = page.styled === true && page.linkLate !== true;
+  const document = {
+    readyState: page.loading ? 'loading' : 'complete',
+    addEventListener: (type: string, fn: () => void) => {
+      docListeners[type] = [...(docListeners[type] ?? []), fn];
+    },
+    visibilityState: 'visible',
+    querySelector: (selector: string) =>
+      selector === 'link[data-aa-style]' && linked ? { rel: 'stylesheet' } : null,
+    documentElement: {
+      setAttribute: (name: string, value: string) => attributes.push([name, value]),
+    },
+  };
+  const loaded = () => {
+    linked = page.styled === true;
+    document.readyState = 'interactive';
+    for (const fn of docListeners.DOMContentLoaded ?? []) fn();
+  };
   const posted: [unknown, string][] = [];
   const parent = { postMessage: (m: unknown, origin: string) => posted.push([m, origin]) };
   const timers: (() => void)[] = [];
@@ -34,12 +64,17 @@ function load(framed: boolean) {
     addEventListener: (type: string, fn: (event: unknown) => void) => {
       listeners[type] = fn;
     },
-    matchMedia: () => ({ matches: true }),
+    matchMedia: () => ({
+      matches: true,
+      addEventListener: (_: string, fn: (event: { matches: boolean }) => void) => {
+        systemTheme.push(fn);
+      },
+    }),
   };
   window.parent = framed ? parent : window;
   runInNewContext(SOURCE, {
     window,
-    document: { readyState: 'complete', addEventListener: () => {}, visibilityState: 'visible' },
+    document,
     setTimeout: (fn: () => void) => timers.push(fn),
     clearTimeout: () => {},
     setInterval: () => 0,
@@ -49,8 +84,32 @@ function load(framed: boolean) {
   const runtime = window.openArtifacts as Runtime;
   const fromParent = (data: unknown, extra: Record<string, unknown> = {}) =>
     listeners.message?.({ source: parent, origin: APP, data, ports: [], ...extra });
-  return { runtime, posted, fromParent, listeners, parent, timers };
+  const setSystemTheme = (theme: 'light' | 'dark') => {
+    for (const fn of systemTheme) fn({ matches: theme === 'dark' });
+  };
+  return {
+    runtime,
+    posted,
+    fromParent,
+    listeners,
+    parent,
+    timers,
+    attributes,
+    loaded,
+    setSystemTheme,
+  };
 }
+
+/** Hands the bridge a port, as the app does, and returns the app's end of it. */
+function connect(fromParent: ReturnType<typeof load>['fromParent']) {
+  const channel = new MessageChannel();
+  channels.push(channel);
+  fromParent({ type: 'aa:port' }, { ports: [channel.port2] });
+  return channel.port1;
+}
+
+/** Lets messages posted on a MessagePort arrive. */
+const settleMessages = () => new Promise((resolve) => setImmediate(resolve));
 
 const code = (c: string) => (error: unknown) => (error as { code?: string }).code === c;
 
@@ -122,5 +181,47 @@ describe('bridge.js in the frame', () => {
     for (const fn of timers) fn();
     await runtime.ready;
     await assert.rejects(runtime.db.get?.('a') as Promise<unknown>, code('no_shell'));
+  });
+});
+
+describe('bridge.js on a styled page', () => {
+  it('sets data-aa-theme on a styled page after it loads', () => {
+    const { attributes, loaded } = load(true, { styled: true, linkLate: true, loading: true });
+    assert.deepEqual(attributes, []);
+    loaded();
+    assert.deepEqual(attributes, [['data-aa-theme', 'dark']]);
+  });
+
+  it('sets it at once when the link is already there', () => {
+    const { attributes } = load(true, { styled: true });
+    assert.deepEqual(attributes.at(-1), ['data-aa-theme', 'dark']);
+  });
+
+  it("follows the app's theme", async () => {
+    const { attributes, fromParent, runtime } = load(true, { styled: true });
+    const port = connect(fromParent);
+    port.postMessage({ type: 'init', theme: 'dark', viewer: null });
+    await runtime.ready;
+    port.postMessage({ type: 'theme', theme: 'light' });
+    await settleMessages();
+    assert.deepEqual(attributes.at(-1), ['data-aa-theme', 'light']);
+    port.postMessage({ type: 'theme', theme: 'dark' });
+    await settleMessages();
+    assert.deepEqual(attributes.at(-1), ['data-aa-theme', 'dark']);
+  });
+
+  it('leaves unstyled pages and pages outside the app alone', async () => {
+    const plain = load(true, { loading: true });
+    plain.loaded();
+    const port = connect(plain.fromParent);
+    port.postMessage({ type: 'init', theme: 'light', viewer: null });
+    await plain.runtime.ready;
+    assert.deepEqual(plain.attributes, []);
+
+    const outside = load(false, { styled: true, loading: true });
+    outside.loaded();
+    outside.setSystemTheme('light');
+    assert.equal(outside.runtime.theme, 'light');
+    assert.deepEqual(outside.attributes, []);
   });
 });
