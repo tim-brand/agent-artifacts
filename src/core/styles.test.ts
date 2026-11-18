@@ -296,6 +296,49 @@ test('a style can be added to an artifact that had none', async (t) => {
   assert.equal((await artifacts.publish({ id: other.id, style: null }, 'a')).version, 1);
 });
 
+test('adding a style to an artifact with its own _style/ files is refused, not dropped', async (t) => {
+  const { artifacts } = setup(t);
+  const s = await publishStyle(artifacts);
+  const own = await artifacts.publish(
+    {
+      title: 'f',
+      files: { 'index.html': MOCK, '_style/mine.css': 'a{}', '_style/style.css': 'b{}' },
+      entry: 'index.html',
+    },
+    'a',
+  );
+  const before = await paths(artifacts, own.id);
+  const edits = [{ old: '<p>m</p>', new: '<p>n</p>' }];
+  await assert.rejects(artifacts.publish({ id: own.id, style: s.id }, 'a'), code('invalid_input'));
+  await assert.rejects(
+    artifacts.publish({ id: own.id, style: s.id, edits }, 'a'),
+    code('invalid_input'),
+  );
+  assert.equal((await artifacts.listVersions(own.id))?.length, 1);
+  // Edits without a style keep the folder as the artifact's own.
+  assert.equal((await artifacts.publish({ id: own.id, edits }, 'a')).version, 2);
+  assert.deepEqual(await paths(artifacts, own.id), before);
+  assert.equal((await artifacts.get(own.id))?.version.style, null);
+});
+
+test('a restyle that changes nothing leaves the artifact as it was', async (t) => {
+  const { artifacts } = setup(t);
+  const s = await publishStyle(artifacts);
+  const m = await mock(artifacts, s.id);
+  const plain = await mock(artifacts, null);
+  const at = async (id: string) => (await artifacts.get(id))?.artifact.updatedAt;
+  const before = [await at(m.id), await at(plain.id)];
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal((await artifacts.publish({ id: m.id, style: s.id }, 'a')).version, 1);
+  assert.equal((await artifacts.publish({ id: plain.id, style: null }, 'a')).version, 1);
+  // Not moved up the library: nothing was published.
+  assert.deepEqual([await at(m.id), await at(plain.id)], before);
+  // A new title with it is a change after all.
+  await artifacts.publish({ id: m.id, style: s.id, title: 'Renamed' }, 'a');
+  assert.notEqual(await at(m.id), before[0]);
+  assert.equal((await artifacts.get(m.id))?.artifact.title, 'Renamed');
+});
+
 test('style: null removes the style and its files', async (t) => {
   const { artifacts } = setup(t);
   const s = await publishStyle(artifacts);

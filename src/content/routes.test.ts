@@ -572,6 +572,19 @@ test("a style's preview links style.css; its guide entry is rendered", async () 
   assert.equal(await text(signer.url('styleArt', 1, 'guide.md')), '# Guide');
 });
 
+test("a rendered page's own colours follow the app's theme too, so a styled page is all light or all dark", async () => {
+  const body = await text(signer.url('styledDoc', 1, 'README.md'));
+  const css = body.slice(body.indexOf('<style>'), body.indexOf('</style>'));
+  // Dark from the system unless the app says light, or when the app says dark: like a style.
+  assert.match(
+    css,
+    /@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-aa-theme="light"\]\) \{[^}]*--code-bg: #161b22/,
+  );
+  assert.match(css, /:root\[data-aa-theme="dark"\] \{[^}]*--code-bg: #161b22/);
+  assert.doesNotMatch(css, /prefers-color-scheme: dark\) \{\s*:root \{/);
+  assert.match(css, /:root\[data-aa-theme="light"\] \{ color-scheme: light; \}/);
+});
+
 test('?raw=1, other files and unstyled entries get no link', async () => {
   for (const url of [
     `${signer.url('styled', 1, 'index.html')}?raw=1`,

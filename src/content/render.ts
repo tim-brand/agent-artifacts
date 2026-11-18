@@ -84,6 +84,13 @@ ${body}
 `;
 }
 
+const DARK = `--fg: #e6edf3; --bg: #0d1117; --muted: #9198a1; --line: #3d444d; --code-bg: #161b22;
+    --kw: #ff7b72; --str: #a5d6ff; --num: #79c0ff; --fn: #d2a8ff; --com: #9198a1; --type: #ffa657;
+    --tag: #7ee787;`;
+
+// Dark follows the system, and on a styled page in the app's frame the app's theme, which the bridge
+// sets as data-aa-theme (see /docs/styles): so what the style leaves to these colours, such as code
+// blocks, matches the style. Pages without a style never get the attribute.
 const CSS = `
 :root {
   --fg: #1f2328; --bg: #ffffff; --muted: #59636e; --line: #d1d9e0; --code-bg: #f6f8fa;
@@ -91,12 +98,15 @@ const CSS = `
   --tag: #116329;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --fg: #e6edf3; --bg: #0d1117; --muted: #9198a1; --line: #3d444d; --code-bg: #161b22;
-    --kw: #ff7b72; --str: #a5d6ff; --num: #79c0ff; --fn: #d2a8ff; --com: #9198a1; --type: #ffa657;
-    --tag: #7ee787;
+  :root:not([data-aa-theme="light"]) {
+    ${DARK}
   }
 }
+:root[data-aa-theme="dark"] {
+  color-scheme: dark;
+  ${DARK}
+}
+:root[data-aa-theme="light"] { color-scheme: light; }
 * { box-sizing: border-box; }
 body {
   margin: 0 auto; max-width: 900px; padding: 2rem 1.25rem 4rem; color: var(--fg);

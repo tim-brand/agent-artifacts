@@ -271,7 +271,7 @@ export function createArtifactService(
     if (!EDITABLE.includes(format)) {
       throw new AppError(
         'invalid_input',
-        `edits only work on html, markdown and code, not ${format}`,
+        `edits only work on html, markdown, code and style artifacts, not ${format}`,
       );
     }
     const files = (stmt.files.all(artifact.id, latest.version) as FileRow[]).map(toFile);
@@ -303,8 +303,10 @@ export function createArtifactService(
   /**
    * The style rules of a publish, inside its transaction. `next` has the version's own files;
    * `carried` says they came from the previous version (edits or a restyle), so a copy of its style
-   * under _style/ is among them. The target style is `requested` when given, else the artifact's
-   * own, and the version gets its latest version. `unchanged`: a restyle that would change nothing.
+   * under _style/ is among them when it had one; that copy is dropped, and any _style/ path left is
+   * the artifact's own, which a style refuses. The target style is `requested` when given, else the
+   * artifact's own, and the version gets its latest version. `unchanged`: a restyle that would
+   * change nothing.
    */
   const withStyle = (
     existing: ArtifactRow | undefined,
@@ -331,7 +333,7 @@ export function createArtifactService(
         `Only html and markdown artifacts can use a style, not ${next.format}${remove}`,
       );
     }
-    if (!carried && own.some((f) => isStylePath(f.path))) {
+    if (own.some((f) => isStylePath(f.path))) {
       throw new AppError(
         'invalid_input',
         `With a style, your own files can't be under ${STYLE.dir}/: that folder holds the style`,
@@ -465,6 +467,13 @@ export function createArtifactService(
           ? (existing?.latest_version ?? 0) + 1
           : (existing?.latest_version ?? 0);
         const newTitle = title ?? existing?.title ?? '';
+        // A restyle that changes nothing, with no settings either: the artifact stays where it was
+        // in the library.
+        const untouched =
+          styled === 'unchanged' &&
+          title === undefined &&
+          description === undefined &&
+          capabilities === undefined;
 
         if (existing) {
           stmt.updateArtifact.run(
@@ -474,7 +483,7 @@ export function createArtifactService(
             version,
             caps,
             styleId,
-            time,
+            untouched ? existing.updated_at : time,
             id,
           );
         } else {

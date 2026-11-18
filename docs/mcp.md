@@ -81,7 +81,7 @@ With a single `content`, the file is stored as `index.html`, `README.md`, `main.
 
 Each publish with an existing `id` adds a version; older versions stay readable. Pass `expectedVersion` (the version the agent last saw) to fail with `version_conflict` instead of overwriting a newer version.
 
-`edits` changes the latest version's entry file in place: a list of `{ old, new }` applied in order. It works on html, markdown and code entries, and all other files are kept. Each `old` must occur exactly once at its step; otherwise nothing is published and the call fails with `edit_failed` and `details: { index, occurrences }`. An agent should call `get_artifact` first so that `old` matches the current text.
+`edits` changes the latest version's entry file in place: a list of `{ old, new }` applied in order. It works on html, markdown and code entries and on a style's entry, and all other files are kept. Each `old` must occur exactly once at its step; otherwise nothing is published and the call fails with `edit_failed` and `details: { index, occurrences }`. An agent should call `get_artifact` first so that `old` matches the current text.
 
 `restore_version` makes an old version the latest again by publishing a copy as a new version. The version it replaces stays readable.
 
