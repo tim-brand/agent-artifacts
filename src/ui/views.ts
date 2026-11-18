@@ -45,6 +45,7 @@ export const FORMAT_LABELS: Record<Format, string> = {
   code: 'Code',
   image: 'Image',
   pdf: 'PDF',
+  style: 'Style',
 };
 
 const SANDBOX =

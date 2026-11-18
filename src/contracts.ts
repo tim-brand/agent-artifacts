@@ -1,7 +1,27 @@
 // The seams between the parts of the app. core/ implements these; mcp/, ui/ and content/ only
 // use them, so each part can be built and tested on its own (with a fake where needed).
 
-export type Format = 'html' | 'markdown' | 'code' | 'pdf' | 'image';
+export type Format = 'html' | 'markdown' | 'code' | 'pdf' | 'image' | 'style';
+
+/**
+ * A style is an artifact with format `style`: a shared stylesheet (`style.css`), notes for agents
+ * (`guide.md`) and an optional specimen page (`preview.html`), plus any fonts or images the CSS
+ * uses. An html or markdown version that uses a style holds a copy of the style's files (file
+ * references, no bytes) under `_style/`, and the content host links `_style/style.css` into its
+ * entry. A style's format never changes, and nothing else becomes a style.
+ */
+export const STYLE = {
+  dir: '_style',
+  css: 'style.css',
+  guide: 'guide.md',
+  preview: 'preview.html',
+} as const;
+
+/** The formats that can use a style. */
+export const STYLED_FORMATS: readonly Format[] = ['html', 'markdown'];
+
+/** Which version of which style a version holds under `_style/`. */
+export type StyleRef = { id: string; version: number };
 
 /** One file to publish: UTF-8 text, or binary as base64. */
 export type FileInput = string | { base64: string };
@@ -27,6 +47,8 @@ export type Artifact = {
   format: Format;
   latestVersion: number;
   capabilities: Capabilities;
+  /** The style that new versions get (its latest version at that moment); null for none. */
+  style: string | null;
   createdAt: string; // ISO 8601
   updatedAt: string;
 };
@@ -46,6 +68,8 @@ export type Version = {
    */
   linesAdded: number | null;
   linesRemoved: number | null;
+  /** The style version this version holds under `_style/`; null when it uses no style. */
+  style: StyleRef | null;
 };
 
 /** One hunk of a unified diff. Each line starts with ' ', '-', '+', or '\' (no newline at end). */
@@ -133,6 +157,12 @@ export type PublishInput = {
    * artifact starts with none. Works in a settings-only publish too.
    */
   capabilities?: Partial<Capabilities>;
+  /**
+   * A style's id for an html or markdown artifact, or null for none; omit to keep the artifact's
+   * style. Every new version gets the style's latest version. With `id` and no content, files or
+   * edits, it makes a new version with the same own files and the style's latest version.
+   */
+  style?: string | null;
 };
 
 export type PublishResult = {
@@ -141,6 +171,8 @@ export type PublishResult = {
   title: string;
   /** App URL of the artifact page: `${APP_ORIGIN}/a/${id}`. */
   url: string;
+  /** Something the publisher should know, e.g. that the artifact's style was deleted. */
+  warning?: string;
 };
 
 export type Page<T> = { items: T[]; nextCursor: string | null };

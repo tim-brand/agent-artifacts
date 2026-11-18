@@ -124,6 +124,7 @@ const artifacts: ArtifactService = {
       format: stored.format,
       latestVersion: 1,
       capabilities: { db: stored.live === true, viewer: false },
+      style: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -137,6 +138,7 @@ const artifacts: ArtifactService = {
       publishedBy: 'test',
       linesAdded: null,
       linesRemoved: null,
+      style: null,
     };
     return { artifact, version: v };
   },

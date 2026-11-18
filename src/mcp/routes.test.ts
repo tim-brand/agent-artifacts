@@ -38,6 +38,7 @@ const artifact: Artifact = {
   format: 'markdown',
   latestVersion: 2,
   capabilities: { db: true, viewer: false },
+  style: null,
   createdAt: '2026-01-01T00:00:00Z',
   updatedAt: '2026-01-02T00:00:00Z',
 };
@@ -52,6 +53,7 @@ const version: Version = {
   publishedBy: 'claude-laptop',
   linesAdded: 1,
   linesRemoved: 0,
+  style: null,
 };
 
 const pinnedLink: ShareLink = {

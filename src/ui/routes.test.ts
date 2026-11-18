@@ -40,6 +40,7 @@ function artifact(id: string, format: Artifact['format'], title: string, version
     format,
     latestVersion: versions,
     capabilities: { db: false, viewer: false },
+    style: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-02T00:00:00.000Z',
   };
@@ -59,6 +60,7 @@ function version(a: Artifact, n: number, entry: string): Version {
     publishedBy: `agent-${n}`,
     linesAdded: n === 1 ? 12 : n,
     linesRemoved: n === 1 ? 0 : 1,
+    style: null,
   };
 }
 

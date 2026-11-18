@@ -21,7 +21,7 @@ import { now, randomId } from './ids.ts';
 import { createLibrary } from './library.ts';
 import { createSearchIndex } from './search.ts';
 
-const EDITABLE: readonly Format[] = ['html', 'markdown', 'code'];
+const EDITABLE: readonly Format[] = ['html', 'markdown', 'code', 'style'];
 
 type NewVersion = { entry: string; format: Format; files: FileInfo[] };
 
@@ -32,6 +32,7 @@ export type ArtifactRow = {
   format: string;
   latest_version: number;
   capabilities: string;
+  style_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -44,6 +45,8 @@ type VersionRow = {
   created_at: string;
   lines_added: number | null;
   lines_removed: number | null;
+  style_id: string | null;
+  style_version: number | null;
 };
 type EntryRow = { format: string; sha256: string | null; content_type: string | null };
 type FileRow = {
@@ -61,6 +64,7 @@ const toArtifact = (row: ArtifactRow): Artifact => ({
   format: row.format as Format,
   latestVersion: row.latest_version,
   capabilities: parseCapabilities(row.capabilities),
+  style: row.style_id ?? null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -103,6 +107,8 @@ const toVersion = (row: VersionRow, files: FileInfo[]): Version => ({
   publishedBy: row.published_by,
   linesAdded: row.lines_added,
   linesRemoved: row.lines_removed,
+  style:
+    row.style_id && row.style_version ? { id: row.style_id, version: row.style_version } : null,
 });
 
 function encodeCursor(row: ArtifactRow): string {
@@ -277,16 +283,23 @@ export function createArtifactService(
       const description = input.description === undefined ? undefined : String(input.description);
       const capabilities = cleanCapabilities(input.capabilities);
       const edits = input.edits === undefined ? undefined : checkEditsInput(input);
-      const prepared = !edits && hasContent(input) ? prepareVersion(input) : null;
+      // Checked before writing blobs so a bad id leaves nothing behind; checked again below.
+      const before = input.id === undefined ? undefined : findArtifact(input.id);
+      if (input.id !== undefined && !before) {
+        throw new AppError('not_found', `Artifact ${input.id} not found`);
+      }
+      // A new version of a style is a style, without inferring the format from its entry.
+      const prepare =
+        before?.format === 'style' && input.format === undefined
+          ? { ...input, format: 'style' as const }
+          : input;
+      const prepared = !edits && hasContent(input) ? prepareVersion(prepare) : null;
 
       if (input.id === undefined) {
         if (!title) throw new AppError('invalid_input', 'title is required for a new artifact');
         if (!prepared) {
           throw new AppError('invalid_input', 'Give content (with format) or files');
         }
-      } else if (!findArtifact(input.id)) {
-        // Checked before writing blobs so a bad id leaves nothing behind; checked again below.
-        throw new AppError('not_found', `Artifact ${input.id} not found`);
       }
 
       const stored: NewVersion | null = prepared
@@ -329,9 +342,19 @@ export function createArtifactService(
           : (existing?.latest_version ?? 0);
         const newTitle = title ?? existing?.title ?? '';
         const format = next?.format ?? (existing?.format as Format);
-        const caps = JSON.stringify(
-          capabilities ?? parseCapabilities(existing?.capabilities ?? '{}'),
-        );
+        if (existing && (existing.format === 'style') !== (format === 'style')) {
+          throw new AppError(
+            'invalid_input',
+            existing.format === 'style'
+              ? `${id} is a style, and a style stays a style: publish its files again (format "style")`
+              : `${id} is a ${existing.format} artifact, and only a new artifact can be a style`,
+          );
+        }
+        const kept = capabilities ?? parseCapabilities(existing?.capabilities ?? '{}');
+        if (format === 'style' && (kept.db || kept.viewer)) {
+          throw new AppError('invalid_input', 'A style has no capabilities');
+        }
+        const caps = JSON.stringify(kept);
 
         if (existing) {
           stmt.updateArtifact.run(

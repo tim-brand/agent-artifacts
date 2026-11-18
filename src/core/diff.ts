@@ -28,9 +28,11 @@ export function textOf(contentType: string, bytes: Uint8Array): string | null {
   return TEXT_TYPES.test(contentType) && isUtf8(bytes) ? new TextDecoder().decode(bytes) : null;
 }
 
-/** Entries that get line counts: html, markdown, code and SVG images. */
+/** Entries that get line counts: html, markdown, code, styles and SVG images. */
 export function isTextEntry(format: Format, contentType: string): boolean {
-  if (format === 'html' || format === 'markdown' || format === 'code') return true;
+  if (format === 'html' || format === 'markdown' || format === 'code' || format === 'style') {
+    return true;
+  }
   return format === 'image' && contentType.startsWith('image/svg+xml');
 }
 

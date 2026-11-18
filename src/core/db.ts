@@ -260,6 +260,17 @@ const MIGRATIONS: Migration[] = [
   ) WITHOUT ROWID;
   CREATE INDEX sessions_by_expiry ON sessions (expires_at);
   `,
+  // Styles. artifacts.style_id is the style that new versions get; versions.style_id and
+  // style_version are the style version a version holds under _style/ (copied file references).
+  // No foreign key: a version keeps the id of a style that was deleted for good, as a record.
+  // settings holds the owner's choices, such as preferred_style, set only from the web UI.
+  `
+  ALTER TABLE artifacts ADD COLUMN style_id TEXT;
+  ALTER TABLE versions ADD COLUMN style_id TEXT;
+  ALTER TABLE versions ADD COLUMN style_version INTEGER;
+  CREATE INDEX versions_by_style ON versions (style_id) WHERE style_id IS NOT NULL;
+  CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+  `,
 ];
 
 export function openDb(dataDir: string, blobs: BlobStore): DatabaseSync {
