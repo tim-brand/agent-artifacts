@@ -26,8 +26,14 @@ export function escapeHtml(text: string): string {
     .replaceAll("'", '&#39;');
 }
 
-export function renderMarkdown(title: string, source: string): string {
-  return page(title, `<article>${marked.parse(source, { async: false })}</article>`);
+/** `stylesheet`: a style's CSS (a URL relative to the page), linked after the built-in CSS. */
+export function renderMarkdown(title: string, source: string, stylesheet?: string): string {
+  return page(
+    title,
+    `<article>${marked.parse(source, { async: false })}</article>`,
+    undefined,
+    stylesheet,
+  );
 }
 
 export function renderCode(title: string, path: string, source: string): string {
@@ -58,7 +64,10 @@ export function renderImage(title: string, path: string): string {
   );
 }
 
-function page(title: string, body: string, bodyClass?: string): string {
+function page(title: string, body: string, bodyClass?: string, stylesheet?: string): string {
+  const link = stylesheet
+    ? `\n<link rel="stylesheet" href="${escapeHtml(stylesheet)}" data-aa-style>`
+    : '';
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -66,7 +75,7 @@ function page(title: string, body: string, bodyClass?: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>${escapeHtml(title)}</title>
-<style>${CSS}</style>
+<style>${CSS}</style>${link}
 </head>
 <body${bodyClass ? ` class="${bodyClass}"` : ''}>
 ${body}

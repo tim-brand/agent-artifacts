@@ -267,3 +267,31 @@ test('the rate limiter refills over time and forgets idle clients', () => {
   assert.equal(limiter.take('c', 1000), true);
   assert.equal(limiter.take('a', 1000), true);
 });
+
+test('a public link to a styled page links the style, and serves _style/style.css', async (t) => {
+  const { artifacts, shareLinks, get, site } = setup(t);
+  const style = await artifacts.publish(
+    {
+      title: 'Brand',
+      format: 'style',
+      files: { 'style.css': ':root{--ink:#111}', 'guide.md': '# Guide' },
+    },
+    'a',
+  );
+  const { id } = await artifacts.publish({ title: 'Site', ...site('one'), style: style.id }, 'a');
+  const { token } = await shareLinks.create(id);
+  const page = await get(`/p/${token}/docs/index.html`);
+  const html = await page.text();
+  assert.ok(
+    html.startsWith(
+      '<link rel="stylesheet" href="../_style/style.css" data-aa-style>\n<h1>one</h1>',
+    ),
+    html,
+  );
+  assert.doesNotMatch(html, /bridge\.js/);
+  const css = await get(
+    new URL('../_style/style.css', `${CONTENT}/p/${token}/docs/index.html`).pathname,
+  );
+  assert.equal(css.status, 200);
+  assert.equal(await css.text(), ':root{--ink:#111}');
+});
