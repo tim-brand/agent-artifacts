@@ -144,8 +144,8 @@ export type PublishInput = {
   files?: Record<string, FileInput>;
   entry?: string;
   /**
-   * Or, with `id`: edits applied in order to the latest version's entry file (html, markdown or
-   * code); the other files are reused. Fails with edit_failed when an `old` doesn't occur exactly once.
+   * Or, with `id`: edits applied in order to the latest version's entry file (html, markdown, code
+   * or style); the other files are reused. Fails with edit_failed when an `old` doesn't occur exactly once.
    */
   edits?: Edit[];
   /** For code: the language, used for the file extension and highlighting (e.g. "ts", "python"). For an image: its extension. */
