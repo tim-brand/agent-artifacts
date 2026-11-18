@@ -87,6 +87,8 @@ The app shows an artifact in an `<iframe>` that points to a signed `/s/` link on
 
 ### The comment bridge
 
+Besides artifacts, the content host serves only the app's fonts at `/_aa/fonts/` (Geist, Geist Mono and their license, unsigned and the same for everyone, so styles can use them without carrying them) and the bridge.
+
 On html, markdown and style entries opened through signed `/s/` links, the content host adds one script, `/_aa/bridge.js`, served from the content host itself. It is the only script that host adds, and public `/p/` links never get it (they get only the no-shell form of the runtime on live pages). The bridge lets the app and the page talk with `postMessage`:
 
 - When the reader selects text, the bridge posts `{ type: 'aa:selection', exact, prefix, suffix }` to the app, which then offers "Comment on selection".
