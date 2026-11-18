@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Format } from '../contracts.ts';
+import { type Format, STYLE } from '../contracts.ts';
 import type { ArtifactRow } from './artifacts.ts';
 import type { BlobStore } from './blobs.ts';
 
@@ -116,11 +116,13 @@ export type SearchIndex = {
 
 export function createSearchIndex(db: DatabaseSync, blobs: BlobStore): SearchIndex {
   const stmt = {
+    // A style is found by its guide, not by its preview page.
     source: db.prepare(
       `SELECT a.id, a.title, a.description, v.format, f.sha256
        FROM artifacts a
        JOIN versions v ON v.artifact_id = a.id AND v.version = a.latest_version
-       LEFT JOIN version_files f ON f.artifact_id = v.artifact_id AND f.version = v.version AND f.path = v.entry
+       LEFT JOIN version_files f ON f.artifact_id = v.artifact_id AND f.version = v.version
+         AND f.path = CASE WHEN v.format = 'style' THEN '${STYLE.guide}' ELSE v.entry END
        WHERE a.id = ? AND a.deleted_at IS NULL`,
     ),
     remove: db.prepare('DELETE FROM artifacts_fts WHERE artifact_id = ?'),

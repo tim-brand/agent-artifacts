@@ -1,10 +1,17 @@
 import { isUtf8 } from 'node:buffer';
-import { AppError, type FileInput, type Format, LIMITS, type PublishInput } from '../contracts.ts';
+import {
+  AppError,
+  type FileInput,
+  type Format,
+  LIMITS,
+  type PublishInput,
+  STYLE,
+} from '../contracts.ts';
 
 export type PreparedFile = { path: string; bytes: Uint8Array; contentType: string };
 export type PreparedVersion = { entry: string; format: Format; files: PreparedFile[] };
 
-const FORMATS: readonly Format[] = ['html', 'markdown', 'code', 'pdf', 'image'];
+const FORMATS: readonly Format[] = ['html', 'markdown', 'code', 'pdf', 'image', 'style'];
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']);
 
@@ -196,7 +203,34 @@ export function prepareVersion(input: PublishInput): PreparedVersion {
   let format: Format;
   let raw: [string, Uint8Array][];
 
-  if (input.content !== undefined) {
+  if (input.format === 'style') {
+    const files = input.files;
+    if (input.content !== undefined || !files || typeof files !== 'object') {
+      throw new AppError(
+        'invalid_input',
+        `A style is published with files: ${STYLE.css}, ${STYLE.guide} and optionally ${STYLE.preview}`,
+      );
+    }
+    const paths = Object.keys(files);
+    if (paths.length > LIMITS.files) {
+      throw new AppError('too_large', `At most ${LIMITS.files} files per publish`);
+    }
+    for (const path of paths) validatePath(path);
+    for (const needed of [STYLE.css, STYLE.guide]) {
+      if (!Object.hasOwn(files, needed)) {
+        throw new AppError('invalid_input', `A style needs ${needed} at the root of files`);
+      }
+    }
+    entry = input.entry ?? (Object.hasOwn(files, STYLE.preview) ? STYLE.preview : STYLE.guide);
+    if (entry !== STYLE.guide && !(entry === STYLE.preview && Object.hasOwn(files, entry))) {
+      throw new AppError(
+        'invalid_input',
+        `The entry of a style is ${STYLE.preview} (when it is one of the files) or ${STYLE.guide}`,
+      );
+    }
+    format = 'style';
+    raw = paths.map((path) => [path, decode(files[path] as FileInput, path)]);
+  } else if (input.content !== undefined) {
     if (typeof input.content !== 'string') {
       throw new AppError('invalid_input', 'content must be a string');
     }

@@ -37,7 +37,7 @@ Node 24 and pnpm 10. There is no build step: Node runs the TypeScript in `src/` 
 - `src/server.ts`, `src/config.ts`: startup and environment.
 - `src/app.ts`: routes each request by its `Host` header to the app host (UI, `/mcp`, `/healthz`) or the content host.
 - `src/contracts.ts`: the service interfaces the routes use. Change a seam here first.
-- `src/core/`: SQLite (`node:sqlite`) plus content-addressed blobs. `db.ts` holds the migrations; one file per service (artifacts, comments, share links, data, search, library, tokens, trash).
+- `src/core/`: SQLite (`node:sqlite`) plus content-addressed blobs. `db.ts` holds the migrations; one file per service (artifacts, comments, share links, data, search, library, styles, tokens, trash).
 - `src/mcp/`: the MCP server, stateless streamable HTTP, bearer-token auth.
 - `src/ui/`: the web UI, server-rendered with `hono/html`. Static files in `src/ui/static/` (`app.css`, `app.js`, fonts).
 - `src/content/`: the content host. Serves files from signed `/s/` URLs and public `/p/` links; `bridge.js` is the comment bridge and the live-pages runtime.

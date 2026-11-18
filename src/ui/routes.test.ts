@@ -21,6 +21,8 @@ import {
   type ShareLink,
   type ShareLinkInput,
   type ShareLinkService,
+  type StyleRef,
+  type StyleService,
   type Thread,
   type TokenInfo,
   type TokenService,
@@ -40,6 +42,7 @@ function artifact(id: string, format: Artifact['format'], title: string, version
     format,
     latestVersion: versions,
     capabilities: { db: false, viewer: false },
+    style: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-02T00:00:00.000Z',
   };
@@ -59,6 +62,7 @@ function version(a: Artifact, n: number, entry: string): Version {
     publishedBy: `agent-${n}`,
     linesAdded: n === 1 ? 12 : n,
     linesRemoved: n === 1 ? 0 : 1,
+    style: null,
   };
 }
 
@@ -169,19 +173,27 @@ function fakeDeps(overrides: {
   artifacts?: Partial<ArtifactService>;
   comments?: Partial<CommentService>;
   oauth?: Partial<OAuthService>;
+  styles?: Partial<StyleService>;
+  /** More artifacts in the store, after the three every test has. */
+  extra?: Artifact[];
+  /** The style each version of an artifact holds, by artifact id. */
+  styleRefs?: Record<string, StyleRef>;
 }) {
   const list: Artifact[] = [
     artifact('a1', 'html', '<script>alert(1)</script>', 3),
     artifact('p1', 'pdf', 'A PDF'),
     artifact('i1', 'image', 'A chart'),
+    ...(overrides.extra ?? []),
   ];
+  const styleRefs = overrides.styleRefs ?? {};
   const deleted: string[] = [];
   const searched: SearchQuery[] = [];
   const browsed: LibraryQuery[] = [];
   const counted: LibraryFilter[] = [];
   const published: { input: PublishInput; by: string }[] = [];
   const entryOf = (a: Artifact) =>
-    ({ pdf: 'document.pdf', image: 'chart.svg' })[a.format as string] ?? 'index.html';
+    ({ pdf: 'document.pdf', image: 'chart.svg', style: 'preview.html' })[a.format as string] ??
+    'index.html';
   const undeleted: string[] = [];
   const restored: { id: string; version: number; publishedBy: string }[] = [];
   const compared: [string, number, number][] = [];
@@ -199,7 +211,7 @@ function fakeDeps(overrides: {
       if (!a || !v || v > a.latestVersion) return null;
       return {
         artifact: a,
-        version: version(a, v, entryOf(a)),
+        version: { ...version(a, v, entryOf(a)), style: styleRefs[a.id] ?? null },
       };
     },
     readFile: async () => null,
@@ -405,6 +417,24 @@ function fakeDeps(overrides: {
     ...overrides.oauth,
   } as Deps['oauth'];
   const sessions = {} as Deps['sessions'];
+  const preferredSet: (string | null)[] = [];
+  let preferredStyle: string | null = null;
+  const styles: StyleService = {
+    list: async () => [],
+    get: async () => null,
+    usedBy: async () => [],
+    latestVersion: async (id) =>
+      list.find((a) => a.id === id && a.format === 'style')?.latestVersion ?? null,
+    preferred: async () => preferredStyle,
+    setPreferred: async (id) => {
+      preferredSet.push(id);
+      const a = id === null ? null : list.find((x) => x.id === id);
+      if (id !== null && !a) throw new AppError('not_found', 'gone');
+      if (a && a.format !== 'style') throw new AppError('invalid_input', 'not a style');
+      preferredStyle = id;
+    },
+    ...overrides.styles,
+  };
   const deps: Deps = {
     config,
     artifacts,
@@ -415,9 +445,11 @@ function fakeDeps(overrides: {
     shareLinks,
     signer,
     sessions,
+    styles,
   };
   return {
     app: createUiRoutes(deps),
+    preferredSet,
     deleted,
     searched,
     browsed,
@@ -1894,5 +1926,149 @@ describe('asks', () => {
 
     const list = await (await get(app, '/?view=list')).text();
     assert.match(list, /<div class="row-flags"><span class="flag ask"/);
+  });
+});
+
+describe('styles', () => {
+  const brand = artifact('s1', 'style', 'Brand <b>x</b>', 3);
+  const mock: Artifact = { ...artifact('m1', 'html', 'Mock', 2), style: 's1' };
+  const orphan: Artifact = { ...artifact('m2', 'html', 'Orphan'), style: 'gone' };
+  const refs: Record<string, StyleRef> = {
+    m1: { id: 's1', version: 1 },
+    m2: { id: 'gone', version: 2 },
+  };
+  const details = async (app: ReturnType<typeof fakeDeps>['app'], id: string) => {
+    const body = await (await get(app, `/a/${id}?panel=details`)).text();
+    return body.slice(body.indexOf('<dl class="details">'), body.indexOf('</dl>'));
+  };
+
+  it('the format filter lists styles', async () => {
+    const { app, browsed } = fakeDeps({ extra: [brand] });
+    const all = await (await get(app, '/')).text();
+    assert.match(all, /<a class="menu-item" href="\/\?format=style">.*Style<\/a>/);
+    const body = await (await get(app, '/?format=style')).text();
+    assert.equal(browsed.at(-1)?.format, 'style');
+    assert.match(body, /Format<b>Style<\/b>/);
+    assert.match(body, /<use href="#i-style">/);
+    assert.match(body, /<symbol id="i-style"/);
+  });
+
+  it("a style's details show the preferred toggle and who uses it, escaped", async () => {
+    const users = [
+      { artifact: { ...mock, title: 'Mock <i>' }, styleVersion: 1 },
+      { artifact: artifact('m3', 'markdown', 'Fresh'), styleVersion: 3 },
+    ];
+    const { app } = fakeDeps({ extra: [brand, mock], styles: { usedBy: async () => users } });
+    const dl = await details(app, 's1');
+    assert.match(dl, /<dt>Preferred style<\/dt><dd>/);
+    assert.match(dl, /No<input type="hidden" name="preferred" value="1">/);
+    assert.match(dl, /<button class="btn sm" type="submit">Make preferred<\/button>/);
+    assert.match(dl, /<form method="post" action="\/a\/s1\/preferred"/);
+    assert.match(dl, /<input type="hidden" name="version" value="3">/);
+    assert.match(dl, /<dt>Used by<\/dt>/);
+    assert.match(
+      dl,
+      /<a href="\/a\/m1">Mock &lt;i&gt;<\/a><span class="muted">v1 · latest v3<\/span>/,
+    );
+    assert.match(dl, /<a href="\/a\/m3">Fresh<\/a><span class="muted">v3<\/span>/);
+    assert.doesNotMatch(dl, /<i>/);
+
+    const chosen = fakeDeps({ extra: [brand], styles: { preferred: async () => 's1' } });
+    const on = await details(chosen.app, 's1');
+    assert.match(on, /Yes<input type="hidden" name="preferred" value="0">/);
+    assert.match(on, />Stop preferring<\/button>/);
+    assert.match(on, /<dt>Used by<\/dt><dd>No artifacts yet<\/dd>/);
+  });
+
+  it("a styled version's details link its style and say when it is behind", async () => {
+    const { app } = fakeDeps({ extra: [brand, mock], styleRefs: refs });
+    const dl = await details(app, 'm1');
+    assert.match(
+      dl,
+      /<dt>Style<\/dt><dd><a href="\/a\/s1">Brand &lt;b&gt;x&lt;\/b&gt;<\/a> v1 · latest v3<\/dd>/,
+    );
+    const fresh = fakeDeps({ extra: [brand, mock], styleRefs: { m1: { id: 's1', version: 3 } } });
+    assert.match(
+      await details(fresh.app, 'm1'),
+      /<dt>Style<\/dt><dd><a href="\/a\/s1">Brand &lt;b&gt;x&lt;\/b&gt;<\/a> v3<\/dd>/,
+    );
+    // A version without a style has no Style row.
+    assert.doesNotMatch(await details(app, 'a1'), /<dt>Style<\/dt>/);
+    // Nor does a style itself.
+    assert.doesNotMatch(await details(app, 's1'), /<dt>Style<\/dt>/);
+  });
+
+  it('a styled version whose style is deleted says so', async () => {
+    const { app } = fakeDeps({ extra: [orphan], styleRefs: refs });
+    assert.match(await details(app, 'm2'), /<dt>Style<\/dt><dd>gone \(deleted\)<\/dd>/);
+  });
+
+  it('POST /a/:id/preferred sets and clears the preferred style', async () => {
+    let current: string | null = null;
+    const { app, preferredSet } = fakeDeps({
+      extra: [brand, mock, artifact('s2', 'style', 'Other')],
+      styles: { preferred: async () => current },
+    });
+    const set = await post(app, '/a/s1/preferred', { preferred: '1', version: '3' }, APP);
+    assert.equal(set.status, 303);
+    assert.equal(set.headers.get('location'), '/a/s1?panel=details');
+    assert.deepEqual(preferredSet, ['s1']);
+    // Clearing another style than the preferred one changes nothing.
+    current = 's1';
+    const other = await post(app, '/a/s2/preferred', { preferred: '0', version: '1' }, APP);
+    assert.equal(other.status, 303);
+    assert.deepEqual(preferredSet, ['s1']);
+    await post(app, '/a/s1/preferred', { preferred: '0', version: '3' }, APP);
+    assert.deepEqual(preferredSet, ['s1', null]);
+    // An older version's page stays where it was.
+    const old = await post(app, '/a/s1/preferred', { preferred: '1', version: '2' }, APP);
+    assert.equal(old.headers.get('location'), '/a/s1/v/2?panel=details');
+    assert.equal((await post(app, '/a/m1/preferred', { preferred: '1' }, APP)).status, 400);
+    assert.equal((await post(app, '/a/nope/preferred', { preferred: '1' }, APP)).status, 404);
+    assert.equal((await post(app, '/a/s1/preferred', { preferred: 'yes' }, APP)).status, 400);
+  });
+
+  it('POST /a/:id/preferred needs the app Origin', async () => {
+    const { app, preferredSet } = fakeDeps({ extra: [brand] });
+    assert.equal((await post(app, '/a/s1/preferred', { preferred: '1' }, CONTENT)).status, 403);
+    assert.equal((await post(app, '/a/s1/preferred', { preferred: '1' })).status, 403);
+    assert.deepEqual(preferredSet, []);
+  });
+
+  it('the library marks the preferred style', async () => {
+    const { app } = fakeDeps({
+      extra: [brand, artifact('s2', 'style', 'Other')],
+      styles: { preferred: async () => 's1' },
+    });
+    for (const view of ['grid', 'list']) {
+      const body = await (await get(app, `/?view=${view}`)).text();
+      const marks = body.split('<span class="flag pref">Preferred</span>').length - 1;
+      assert.equal(marks, 1, view);
+      const article = body.slice(body.indexOf('href="/a/s1"'));
+      assert.ok(article.indexOf('Preferred') < article.indexOf('</article>'), view);
+    }
+  });
+});
+
+describe('styles docs', () => {
+  it('GET /docs/styles renders the sample style escaped', async () => {
+    const { app } = fakeDeps({});
+    const res = await get(app, '/docs/styles');
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.match(body, /<h1>Styles<\/h1>/);
+    for (const id of ['sample-style-css', 'sample-style-guide', 'sample-style-preview']) {
+      assert.match(body, new RegExp(`<code id="${id}">`), id);
+      assert.match(body, new RegExp(`data-copy="${id}"`), id);
+    }
+    assert.ok(body.includes('&lt;!doctype html&gt;'));
+    assert.ok(!body.includes('<p class="card'));
+    assert.match(body, /data-aa-theme/);
+    // Its own sidebar link is the current one, and the live pages link isn't.
+    assert.match(body, /<a class="nav[^"]*" href="\/docs\/styles" aria-current="page">/);
+    assert.doesNotMatch(body, /href="\/docs\/runtime" aria-current="page"/);
+    const runtime = await (await get(app, '/docs/runtime')).text();
+    assert.match(runtime, /href="\/docs\/styles"/);
+    assert.doesNotMatch(runtime, /href="\/docs\/styles" aria-current="page"/);
   });
 });

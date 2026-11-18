@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Hono, type HonoRequest } from 'hono';
-import type { ArtifactService, Deps } from '../contracts.ts';
+import { type ArtifactService, type Deps, STYLE, type Version } from '../contracts.ts';
 import { clientAddress, createRateLimiter } from './rate-limit.ts';
-import { renderCode, renderImage, renderMarkdown } from './render.ts';
+import { escapeHtml, renderCode, renderImage, renderMarkdown } from './render.ts';
 
 /**
  * The content host: serves untrusted, agent-written files under
@@ -21,6 +21,10 @@ import { renderCode, renderImage, renderMarkdown } from './render.ts';
  * selection and gives the page `window.openArtifacts` (live pages). Anywhere else, such as a /p/
  * link or a /s/ link opened in its own tab, it only defines `window.openArtifacts` in its no-shell
  * form, so a live page still loads and can say it only works in the app.
+ *
+ * The one tag it adds besides is the style link: on the entry of a version that uses a style, a
+ * `<link rel="stylesheet" data-aa-style>` to its copy under _style/, and on a style's own entry, to
+ * its style.css. Both are the version's own files, so /s/ and /p/ get it alike.
  */
 
 const SANDBOX =
@@ -157,8 +161,9 @@ export function createContentRoutes(deps: Deps): Hono {
 }
 
 /**
- * One file of a version, rendered when it's a markdown, code or image entry, with the policy's
- * bridge on html and markdown entries. Null when not found.
+ * One file of a version, rendered when it's a markdown, code or image entry (or a style's guide.md
+ * entry), with the policy's bridge on html, markdown and style entries and the style link on a styled
+ * entry. Null when not found.
  */
 async function serveFile(
   artifacts: ArtifactService,
@@ -175,19 +180,24 @@ async function serveFile(
 
   const { format, entry, files } = found.version;
   const raw = req.query('raw') === '1';
-  const render =
-    path === entry && (format === 'markdown' || format === 'code' || format === 'image') && !raw;
+  const isEntry = path === entry && !raw;
+  // A style's guide.md entry is rendered like a markdown entry.
+  const markdown = format === 'markdown' || (format === 'style' && entry === STYLE.guide);
+  const render = isEntry && (markdown || format === 'code' || format === 'image');
   const { db, viewer } = found.artifact.capabilities;
   const wanted = policy.runtimeOnly
     ? format === 'html' && (db || viewer)
-    : format === 'html' || format === 'markdown';
-  const bridge = path === entry && wanted && !raw ? policy.bridge : null;
+    : format === 'html' || format === 'markdown' || format === 'style';
+  const bridge = isEntry && wanted ? policy.bridge : null;
+  const stylesheet = isEntry ? styleHref(found.version) : null;
   const sha256 = files.find((f) => f.path === path)?.sha256;
   const contentType = render ? HTML : file.contentType;
   const headers = securityHeaders(contentType, policy);
   // Version content is immutable, so the file hash is a strong validator.
   if (sha256) {
-    const variant = `${render ? '-rendered' : ''}${bridge ? `-bridge-${bridge.hash}` : ''}`;
+    const variant =
+      `${render ? '-rendered' : ''}${bridge ? `-bridge-${bridge.hash}` : ''}` +
+      (stylesheet ? '-styled' : '');
     headers.ETag = `"${sha256}${variant}"`;
   }
   if (headers.ETag && req.header('if-none-match') === headers.ETag) {
@@ -199,26 +209,54 @@ async function serveFile(
   if (render && format === 'image') body = renderImage(title, path);
   else if (render) {
     const source = new TextDecoder().decode(file.bytes);
-    body = format === 'markdown' ? renderMarkdown(title, source) : renderCode(title, path, source);
+    body = markdown
+      ? renderMarkdown(title, source, stylesheet ?? undefined)
+      : renderCode(title, path, source);
   }
-  if (bridge) body = insertScript(body, bridge.tag);
+  if (bridge) body = insertAfterDoctype(body, bridge.tag, 'end');
+  // After the bridge, at the same place: so the link comes first, before any script.
+  if (stylesheet && !render) {
+    const link = `<link rel="stylesheet" href="${escapeHtml(stylesheet)}" data-aa-style>\n`;
+    body = insertAfterDoctype(body, new TextEncoder().encode(link), 'start');
+  }
   return new Response(body as Uint8Array<ArrayBuffer> | string, { headers });
+}
+
+/**
+ * The style.css an entry links, relative to the entry's folder: a styled html or markdown version's
+ * copy under _style/, or a style's own. Null for an entry that has no style.
+ */
+function styleHref(version: Version): string | null {
+  const { format, entry, style } = version;
+  if (format === 'style') return STYLE.css;
+  if (!style || (format !== 'html' && format !== 'markdown')) return null;
+  const depth = entry.split('/').length - 1;
+  return `${'../'.repeat(depth)}${STYLE.dir}/${STYLE.css}`;
 }
 
 /** A doctype at the start, after an optional BOM, whitespace and comments. Bytes as latin1. */
 const DOCTYPE = /^(?:\xEF\xBB\xBF)?(?:\s|<!--[\s\S]*?-->)*<!doctype[^>]*>/i;
+const BOM = /^\xEF\xBB\xBF/;
 
 /**
- * Right after a leading doctype, the script runs before any of the page's own, so a page can use
+ * Right after a leading doctype, a script runs before any of the page's own, so a page can use
  * `window.openArtifacts` from its first inline script; the parser opens the head for it and still
  * merges the page's own <html> attributes and head. Anything before the doctype would switch the
- * page to quirks mode, so without one at the start it is appended after everything instead, where
- * it can't land inside a tag or script; such a page reads the runtime from DOMContentLoaded.
+ * page to quirks mode, so without one `missing` says where the tag goes instead: 'end' appends it
+ * after everything, where it can't land inside a tag or script (such a page reads the runtime from
+ * DOMContentLoaded); 'start' puts it first, after a BOM, so a stylesheet comes before the page's
+ * own styles (the page has no doctype, so it is in quirks mode anyway).
  */
-function insertScript(body: Uint8Array | string, tag: Uint8Array): Uint8Array {
+function insertAfterDoctype(
+  body: Uint8Array | string,
+  tag: Uint8Array,
+  missing: 'start' | 'end',
+): Uint8Array {
   const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
   const start = Buffer.from(bytes.buffer, bytes.byteOffset, Math.min(bytes.byteLength, 16_384));
-  const at = DOCTYPE.exec(start.toString('latin1'))?.[0].length ?? bytes.byteLength;
+  const head = start.toString('latin1');
+  const fallback = missing === 'end' ? bytes.byteLength : (BOM.exec(head)?.[0].length ?? 0);
+  const at = DOCTYPE.exec(head)?.[0].length ?? fallback;
   const out = new Uint8Array(bytes.byteLength + tag.byteLength);
   out.set(bytes.subarray(0, at));
   out.set(tag, at);

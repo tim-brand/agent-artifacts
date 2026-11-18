@@ -282,7 +282,9 @@ test('the migration backfills counts for every version, deleted artifacts too', 
   env.reopen(() => {
     const db = new DatabaseSync(join(env.config.dataDir, 'artifacts.db'));
     db.exec(
-      'DROP TABLE sessions; DROP TABLE oauth_tokens; DROP TABLE oauth_codes; DROP TABLE oauth_grants; DROP TABLE oauth_clients; ' +
+      'DROP TABLE settings; DROP INDEX versions_by_style; ALTER TABLE versions DROP COLUMN style_version; ' +
+        'ALTER TABLE versions DROP COLUMN style_id; ALTER TABLE artifacts DROP COLUMN style_id; ' +
+        'DROP TABLE sessions; DROP TABLE oauth_tokens; DROP TABLE oauth_codes; DROP TABLE oauth_grants; DROP TABLE oauth_clients; ' +
         'ALTER TABLE versions DROP COLUMN lines_added; ALTER TABLE versions DROP COLUMN lines_removed; PRAGMA user_version = 6',
     );
     db.close();

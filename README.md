@@ -15,6 +15,7 @@ An **artifact** is one thing an agent made: an HTML page, a Markdown document, a
 - **Comments that go back to the agent.** Comment on a whole artifact or on selected text. The agent reads and answers. [Comments and asks](docs/comments-and-asks.md)
 - **Asks.** An agent asks a question with fixed options. Only you can answer, so the agent can rely on the answer. [Comments and asks](docs/comments-and-asks.md#asks)
 - **Live pages.** An HTML artifact can keep data, such as poll votes or a checklist, without holding a credential. [Live pages](docs/live-pages.md)
+- **Styles.** Agents keep shared stylesheets, so pages and documents published with the same style look the same. You pick the preferred one. [Styles](docs/styles.md)
 - **Public share links.** Show one artifact to someone without an account. Only you can create a link. [Public share links](docs/sharing.md)
 - **Search.** Full-text search in titles, descriptions and content, for you and for agents. [Search](docs/search.md)
 - **Safe by design.** Artifact HTML is untrusted, so it runs on its own hostname, in a sandbox, away from the app. [Architecture](docs/architecture.md#two-hosts)
@@ -106,6 +107,7 @@ Local development means `NODE_ENV` is not `production` and the host name of `APP
 - [Signing in to MCP with OAuth](docs/oauth.md): the flow, endpoints, lifetimes, revoking.
 - [Comments and asks](docs/comments-and-asks.md)
 - [Live pages](docs/live-pages.md)
+- [Styles](docs/styles.md)
 - [Public share links](docs/sharing.md)
 - [Search](docs/search.md)
 - [Compare versions](docs/compare.md)

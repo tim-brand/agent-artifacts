@@ -8,6 +8,7 @@ import type {
   Deps,
   FileInfo,
   Format,
+  StyleRef,
   Version,
 } from '../contracts.ts';
 import { createContentRoutes } from './routes.ts';
@@ -42,7 +43,10 @@ type Stored = {
   entry: string;
   files: Record<string, [string, string]>;
   live?: boolean;
+  style?: StyleRef;
 };
+
+const CSS_FILE: [string, string] = ['text/css; charset=utf-8', ':root{--ink:#111}'];
 
 const store: Record<string, Stored> = {
   site: {
@@ -102,6 +106,69 @@ const store: Record<string, Stored> = {
       ],
     },
   },
+  styled: {
+    format: 'html',
+    entry: 'index.html',
+    style: { id: 'st', version: 1 },
+    files: {
+      'index.html': ['text/html; charset=utf-8', '<!doctype html>\n<p class="card">x</p>'],
+      'app.js': ['text/javascript; charset=utf-8', 'console.log(1)'],
+      '_style/style.css': CSS_FILE,
+    },
+  },
+  styledNoDoctype: {
+    format: 'html',
+    entry: 'index.html',
+    style: { id: 'st', version: 1 },
+    files: {
+      'index.html': ['text/html; charset=utf-8', '<p class="card">x</p>'],
+      '_style/style.css': CSS_FILE,
+    },
+  },
+  styledBom: {
+    format: 'html',
+    entry: 'index.html',
+    style: { id: 'st', version: 1 },
+    files: {
+      'index.html': ['text/html; charset=utf-8', '\uFEFF<p>x</p>'],
+      '_style/style.css': CSS_FILE,
+    },
+  },
+  styledNested: {
+    format: 'html',
+    entry: 'pages/index.html',
+    style: { id: 'st', version: 1 },
+    files: {
+      'pages/index.html': ['text/html; charset=utf-8', '<!doctype html><p>x</p>'],
+      '_style/style.css': CSS_FILE,
+    },
+  },
+  styledDoc: {
+    format: 'markdown',
+    entry: 'README.md',
+    style: { id: 'st', version: 1 },
+    files: {
+      'README.md': ['text/markdown; charset=utf-8', '# Styled'],
+      '_style/style.css': CSS_FILE,
+    },
+  },
+  styleArt: {
+    format: 'style',
+    entry: 'preview.html',
+    files: {
+      'preview.html': ['text/html; charset=utf-8', '<!doctype html><p class="card">x</p>'],
+      'guide.md': ['text/markdown; charset=utf-8', '# Guide'],
+      'style.css': CSS_FILE,
+    },
+  },
+  styleGuide: {
+    format: 'style',
+    entry: 'guide.md',
+    files: {
+      'guide.md': ['text/markdown; charset=utf-8', '# Guide'],
+      'style.css': CSS_FILE,
+    },
+  },
 };
 
 const readCalls: string[] = [];
@@ -124,6 +191,7 @@ const artifacts: ArtifactService = {
       format: stored.format,
       latestVersion: 1,
       capabilities: { db: stored.live === true, viewer: false },
+      style: stored.style?.id ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -137,6 +205,7 @@ const artifacts: ArtifactService = {
       publishedBy: 'test',
       linesAdded: null,
       linesRemoved: null,
+      style: stored.style ?? null,
     };
     return { artifact, version: v };
   },
@@ -182,6 +251,7 @@ const deps = {
   comments: {} as Deps['comments'],
   data: {} as Deps['data'],
   sessions: {} as Deps['sessions'],
+  styles: {} as Deps['styles'],
 } satisfies Deps;
 
 const app = createContentRoutes(deps);
@@ -437,4 +507,103 @@ test('the bridge script is served unsigned, talking only to the app origin', asy
   assert.match(js, /event\.source !== window\.parent \|\| event\.origin !== APP_ORIGIN/);
   assert.equal((await get(`${CONTENT}/_aa/bridge.js`, { method: 'POST' })).status, 404);
   assert.equal((await get(`${CONTENT}/_aa/other.js`)).status, 404);
+});
+
+// ---- Styles ----
+
+const LINK = (href: string) => `<link rel="stylesheet" href="${href}" data-aa-style>`;
+const text = async (url: string) => (await get(url)).text();
+
+test('a styled html entry links _style/style.css right after the doctype, before the bridge', async () => {
+  const body = await text(signer.url('styled', 1, 'index.html'));
+  assert.match(
+    body,
+    /^<!doctype html>\n?<link rel="stylesheet" href="_style\/style.css" data-aa-style>\n\n?<script src="\/_aa\/bridge\.js/i,
+  );
+  assert.equal(body.split('data-aa-style').length, 2);
+  assert.ok(body.includes('<p class="card">x</p>'));
+  const css = await get(new URL('_style/style.css', signer.url('styled', 1, 'index.html')).href);
+  assert.equal(css.headers.get('content-type'), 'text/css; charset=utf-8');
+  assert.equal(await css.text(), ':root{--ink:#111}');
+});
+
+test('without a doctype the link goes at the start', async () => {
+  const body = await text(signer.url('styledNoDoctype', 1, 'index.html'));
+  assert.ok(body.startsWith(`${LINK('_style/style.css')}\n<p class="card">x</p>`), body);
+  assert.match(body, BRIDGE_TAG);
+});
+
+test('without a doctype the link still goes after a BOM', async () => {
+  const bytes = new Uint8Array(
+    await (await get(signer.url('styledBom', 1, 'index.html'))).arrayBuffer(),
+  );
+  assert.deepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  assert.ok(
+    new TextDecoder('utf-8', { ignoreBOM: true })
+      .decode(bytes)
+      .startsWith(`\uFEFF${LINK('_style/style.css')}`),
+  );
+});
+
+test("the link is relative to the entry's folder", async () => {
+  const body = await text(signer.url('styledNested', 1, 'pages/index.html'));
+  assert.ok(body.includes(LINK('../_style/style.css')), body);
+});
+
+test('a styled markdown entry links the style after the built-in CSS', async () => {
+  const body = await text(signer.url('styledDoc', 1, 'README.md'));
+  const link = body.indexOf(LINK('_style/style.css'));
+  assert.ok(link > body.indexOf('</style>'), body);
+  assert.ok(link < body.indexOf('</head>'));
+  assert.match(body, /<h1>Styled<\/h1>/);
+});
+
+test("a style's preview links style.css; its guide entry is rendered", async () => {
+  const preview = await text(signer.url('styleArt', 1, 'preview.html'));
+  assert.ok(preview.startsWith(`<!doctype html>${LINK('style.css')}`), preview);
+  assert.match(preview, /bridge\.js/);
+  const res = await get(signer.url('styleGuide', 1, 'guide.md'));
+  assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8');
+  const guide = await res.text();
+  assert.match(guide, /<h1>Guide<\/h1>/);
+  assert.ok(guide.includes(LINK('style.css')));
+  assert.match(guide, /bridge\.js/);
+  // Not the entry of styleArt: served as it is.
+  assert.equal(await text(signer.url('styleArt', 1, 'guide.md')), '# Guide');
+});
+
+test("a rendered page's own colours follow the app's theme too, so a styled page is all light or all dark", async () => {
+  const body = await text(signer.url('styledDoc', 1, 'README.md'));
+  const css = body.slice(body.indexOf('<style>'), body.indexOf('</style>'));
+  // Dark from the system unless the app says light, or when the app says dark: like a style.
+  assert.match(
+    css,
+    /@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-aa-theme="light"\]\) \{[^}]*--code-bg: #161b22/,
+  );
+  assert.match(css, /:root\[data-aa-theme="dark"\] \{[^}]*--code-bg: #161b22/);
+  assert.doesNotMatch(css, /prefers-color-scheme: dark\) \{\s*:root \{/);
+  assert.match(css, /:root\[data-aa-theme="light"\] \{ color-scheme: light; \}/);
+});
+
+test('?raw=1, other files and unstyled entries get no link', async () => {
+  for (const url of [
+    `${signer.url('styled', 1, 'index.html')}?raw=1`,
+    signer.url('styled', 1, 'app.js'),
+    signer.url('styled', 1, '_style/style.css'),
+    `${signer.url('styleArt', 1, 'preview.html')}?raw=1`,
+    signer.url('styleArt', 1, 'style.css'),
+    signer.url('site', 1, 'index.html'),
+    signer.url('doc', 1, 'README.md'),
+  ]) {
+    assert.doesNotMatch(await text(url), /data-aa-style/, url);
+  }
+});
+
+test('the ETag differs for a styled entry', async () => {
+  const styled = (await get(signer.url('styled', 1, 'index.html'))).headers.get('etag') ?? '';
+  assert.match(styled, /^"[0-9a-f]{64}-bridge-[0-9a-f]{16}-styled"$/);
+  const raw = (await get(`${signer.url('styled', 1, 'index.html')}?raw=1`)).headers.get('etag');
+  assert.match(raw ?? '', /^"[0-9a-f]{64}"$/);
+  const doc = (await get(signer.url('styledDoc', 1, 'README.md'))).headers.get('etag') ?? '';
+  assert.match(doc, /-rendered-bridge-[0-9a-f]{16}-styled"$/);
 });

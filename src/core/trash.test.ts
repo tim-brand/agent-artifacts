@@ -417,3 +417,20 @@ test('image artifacts, even SVG, cannot be edited', async (t) => {
   );
   assert.equal((await artifacts.get(id))?.artifact.latestVersion, 1);
 });
+
+test('purging the preferred style clears the setting', async (t) => {
+  const { artifacts, styles, purge, config } = setup(t);
+  const files = { 'style.css': 'a{}', 'guide.md': '# g' };
+  const { id } = await artifacts.publish({ title: 'Brand', format: 'style', files }, 'a');
+  const { id: other } = await artifacts.publish({ title: 'Keep', format: 'style', files }, 'a');
+  await styles.setPreferred(id);
+  await artifacts.delete(id);
+  await purge(Date.now() + 31 * DAY);
+  const db = new DatabaseSync(join(config.dataDir, 'artifacts.db'));
+  t.after(() => db.close());
+  assert.deepEqual(db.prepare('SELECT key, value FROM settings').all(), []);
+  // Another style that is preferred survives a purge that doesn't take it.
+  await styles.setPreferred(other);
+  await purge(Date.now() + 31 * DAY);
+  assert.equal(await styles.preferred(), other);
+});

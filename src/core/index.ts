@@ -8,6 +8,7 @@ import type {
   OAuthService,
   SessionService,
   ShareLinkService,
+  StyleService,
   TokenService,
 } from '../contracts.ts';
 import { createArtifactService } from './artifacts.ts';
@@ -20,6 +21,7 @@ import { createPurge, type PurgeResult } from './purge.ts';
 import { createSessionService } from './sessions.ts';
 import { createShareLinkService } from './share-links.ts';
 import { createSigner } from './signer.ts';
+import { createStyleService } from './styles.ts';
 import { createTokenService } from './tokens.ts';
 
 export function createCore(config: Config): {
@@ -31,6 +33,7 @@ export function createCore(config: Config): {
   shareLinks: ShareLinkService;
   signer: ContentSigner;
   sessions: SessionService;
+  styles: StyleService;
   /**
    * Empties the trash of artifacts deleted over 30 days ago and removes unused blobs, expired OAuth
    * codes and tokens, ended grants and clients unused for 30 days, and expired sessions.
@@ -44,9 +47,11 @@ export function createCore(config: Config): {
   const oauth = createOAuthService(db, config.appOrigin);
   const purge = createPurge(db, blobsDir);
   const sessions = createSessionService(db);
+  const artifacts = createArtifactService(db, blobs, config.appOrigin);
   return {
     sessions,
-    artifacts: createArtifactService(db, blobs, config.appOrigin),
+    artifacts,
+    styles: createStyleService(db, artifacts),
     comments: createCommentService(db),
     data: createDataService(db),
     tokens: createTokenService(db),

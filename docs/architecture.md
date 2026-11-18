@@ -22,7 +22,7 @@ There is no build step. Node 24 runs the TypeScript in `src/` directly, by remov
 | `src/hash-password.ts` | The command that makes an `AUTH_USERS` entry. It imports only `src/core/passwords.ts`, so it runs in the image. |
 | `src/app.ts` | Sends each request to the app host or the content host by its `Host` header. |
 | `src/contracts.ts` | The service interfaces that the routes use. Change a seam here first. |
-| `src/core/` | SQLite and the stored files. `db.ts` holds the migrations; one file per service (artifacts, comments, share links, data, search, library, tokens, trash, OAuth, sessions) and `passwords.ts` for the password hashes. |
+| `src/core/` | SQLite and the stored files. `db.ts` holds the migrations; one file per service (artifacts, comments, share links, data, search, library, styles, tokens, trash, OAuth, sessions) and `passwords.ts` for the password hashes. |
 | `src/mcp/` | The MCP server: stateless streamable HTTP with bearer-token sign-in. |
 | `src/oauth/` | The public OAuth endpoints and their rules. |
 | `src/ui/` | The web UI, rendered on the server with `hono/html`. Static files are in `src/ui/static/`. |
@@ -71,7 +71,8 @@ The person's email is used for the author of comments, the answerer of asks, the
 Everything is in `DATA_DIR`: `artifacts.db` and `blobs/`.
 
 - **Blobs** are content-addressed. A file's bytes are stored once, under their SHA-256 (`blobs/ab/ab12…`), written to a temporary file and renamed into place, so a reader never sees a half-written file. Two versions, or two artifacts, with the same file share one blob. A version row lists its files with their path, size, type and hash; restoring a version copies those references and no bytes.
-- **The database** has one table per concept: `artifacts`, `versions`, `version_files`, `tokens`, `share_links`, `threads`, `comments`, `asks`, `artifact_data`, a full-text table `artifacts_fts`, the OAuth tables `oauth_clients`, `oauth_grants`, `oauth_codes` and `oauth_tokens`, and `sessions` (the built-in sign-in). It runs in WAL mode with foreign keys on.
+- **The database** has one table per concept: `artifacts`, `versions`, `version_files`, `tokens`, `share_links`, `threads`, `comments`, `asks`, `artifact_data`, a full-text table `artifacts_fts`, the OAuth tables `oauth_clients`, `oauth_grants`, `oauth_codes` and `oauth_tokens`, `sessions` (the built-in sign-in), and `settings` (the owner's choices, such as `preferred_style`). It runs in WAL mode with foreign keys on.
+- **Styles** are artifacts with the format `style`. `artifacts.style_id` is the style that an artifact's new versions get; `versions.style_id` and `style_version` are the style version that a version holds under `_style/`, as file references. They have no foreign key, so a version keeps the id of a style that was deleted for good. `settings.preferred_style` is set only from the web UI; purging that style removes it.
 - **Credentials** are stored only as hashes: personal access tokens, share link tokens, OAuth codes and tokens and session tokens as SHA-256, and passwords as scrypt (in the settings, not the database).
 - **Deleting.** Deleting an artifact sets `deleted_at`. After 30 days an hourly job removes the row for good. Threads, comments, asks, share links and live page data reference the artifact with `ON DELETE CASCADE`, so they go with it. Then blobs that no version references and that are older than an hour are removed. The hour is a grace period for a publish that is still writing.
 - **Live page data** has one row per document, with a revision number per artifact. A delete leaves a tombstone so that polling pages see it; past 1,000 tombstones they are dropped and a page that polls from before that gets a full reset.
@@ -86,7 +87,7 @@ The app shows an artifact in an `<iframe>` that points to a signed `/s/` link on
 
 ### The comment bridge
 
-On html and markdown entries opened through signed `/s/` links, the content host adds one script, `/_aa/bridge.js`, served from the content host itself. It is the only script that host adds, and public `/p/` links never get it (they get only the no-shell form of the runtime on live pages). The bridge lets the app and the page talk with `postMessage`:
+On html, markdown and style entries opened through signed `/s/` links, the content host adds one script, `/_aa/bridge.js`, served from the content host itself. It is the only script that host adds, and public `/p/` links never get it (they get only the no-shell form of the runtime on live pages). The bridge lets the app and the page talk with `postMessage`:
 
 - When the reader selects text, the bridge posts `{ type: 'aa:selection', exact, prefix, suffix }` to the app, which then offers "Comment on selection".
 - The app sends the quotes of open threads back (`aa:highlight`), and the bridge wraps the best match of each in `<mark>`.
@@ -101,4 +102,10 @@ The bridge also defines `window.openArtifacts`. A page's calls are made by the a
 
 Answers carry data, and a message to a frame's window has to be posted with target origin `'*'` (its origin is opaque), so it would reach whatever document the frame shows by then, such as a site the reader clicked through to. So the app answers the frame's first `aa:ready` by transferring one end of a `MessageChannel`, and all runtime traffic goes over that port, which only that document holds and which dies with it. The app hands out one port per artifact page view: a later `aa:ready` (the frame navigated, or reloaded itself) gets `aa:no-port`, and the runtime of that page acts as if it were outside the app. The viewer is sent over the port, and only when declared. The data service checks the `db` capability on every call; the shell's own check only saves a request.
 
-For how the features work from a user's side, see [Live pages](live-pages.md) and [Comments and asks](comments-and-asks.md).
+### Styled pages
+
+A version that uses a style holds the style's files under `_style/`. On its entry (without `?raw=1`), the content host adds `<link rel="stylesheet" href="…/_style/style.css" data-aa-style>`: right after a leading doctype, or at the start of the file without one, and after the built-in CSS of a rendered Markdown page. The `href` is relative to the entry's folder. A style's own entry links its `style.css` the same way. The link goes in before the bridge script, and the ETag of such a response ends in `-styled`. It is the version's own file, so public `/p/` links get it as well.
+
+In the app's frame, the bridge sets `data-aa-theme="light"` or `"dark"` on the `<html>` of a page that has that link, when it starts, when the document has loaded (a Markdown page's link comes after the bridge), and on every `init` and `theme` message over the port. Outside the frame it never sets it, so the style follows the system setting there.
+
+For how the features work from a user's side, see [Live pages](live-pages.md), [Styles](styles.md) and [Comments and asks](comments-and-asks.md).

@@ -26,8 +26,14 @@ export function escapeHtml(text: string): string {
     .replaceAll("'", '&#39;');
 }
 
-export function renderMarkdown(title: string, source: string): string {
-  return page(title, `<article>${marked.parse(source, { async: false })}</article>`);
+/** `stylesheet`: a style's CSS (a URL relative to the page), linked after the built-in CSS. */
+export function renderMarkdown(title: string, source: string, stylesheet?: string): string {
+  return page(
+    title,
+    `<article>${marked.parse(source, { async: false })}</article>`,
+    undefined,
+    stylesheet,
+  );
 }
 
 export function renderCode(title: string, path: string, source: string): string {
@@ -58,7 +64,10 @@ export function renderImage(title: string, path: string): string {
   );
 }
 
-function page(title: string, body: string, bodyClass?: string): string {
+function page(title: string, body: string, bodyClass?: string, stylesheet?: string): string {
+  const link = stylesheet
+    ? `\n<link rel="stylesheet" href="${escapeHtml(stylesheet)}" data-aa-style>`
+    : '';
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -66,7 +75,7 @@ function page(title: string, body: string, bodyClass?: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>${escapeHtml(title)}</title>
-<style>${CSS}</style>
+<style>${CSS}</style>${link}
 </head>
 <body${bodyClass ? ` class="${bodyClass}"` : ''}>
 ${body}
@@ -75,6 +84,13 @@ ${body}
 `;
 }
 
+const DARK = `--fg: #e6edf3; --bg: #0d1117; --muted: #9198a1; --line: #3d444d; --code-bg: #161b22;
+    --kw: #ff7b72; --str: #a5d6ff; --num: #79c0ff; --fn: #d2a8ff; --com: #9198a1; --type: #ffa657;
+    --tag: #7ee787;`;
+
+// Dark follows the system, and on a styled page in the app's frame the app's theme, which the bridge
+// sets as data-aa-theme (see /docs/styles): so what the style leaves to these colours, such as code
+// blocks, matches the style. Pages without a style never get the attribute.
 const CSS = `
 :root {
   --fg: #1f2328; --bg: #ffffff; --muted: #59636e; --line: #d1d9e0; --code-bg: #f6f8fa;
@@ -82,12 +98,15 @@ const CSS = `
   --tag: #116329;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --fg: #e6edf3; --bg: #0d1117; --muted: #9198a1; --line: #3d444d; --code-bg: #161b22;
-    --kw: #ff7b72; --str: #a5d6ff; --num: #79c0ff; --fn: #d2a8ff; --com: #9198a1; --type: #ffa657;
-    --tag: #7ee787;
+  :root:not([data-aa-theme="light"]) {
+    ${DARK}
   }
 }
+:root[data-aa-theme="dark"] {
+  color-scheme: dark;
+  ${DARK}
+}
+:root[data-aa-theme="light"] { color-scheme: light; }
 * { box-sizing: border-box; }
 body {
   margin: 0 auto; max-width: 900px; padding: 2rem 1.25rem 4rem; color: var(--fg);

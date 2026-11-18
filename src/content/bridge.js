@@ -1,7 +1,9 @@
-// The bridge, the one script the content host adds to a page. It does two things:
+// The bridge, the one script the content host adds to a page. It does three things:
 // - It defines `window.openArtifacts`, the runtime of live pages (see /docs/runtime in the app).
 // - In the app's frame, it tells the app about the reader's text selection and highlights the
 //   quotes the app sends back, for comments.
+// - In the app's frame, on a page that uses a style (the content host's link[data-aa-style]), it
+//   sets <html data-aa-theme="light|dark"> to the app's theme, so the style can follow it.
 // The artifact shares this realm: it can replace anything here and post any message itself, so the
 // app treats every message from the frame as untrusted and the server checks every data call.
 (() => {
@@ -47,9 +49,18 @@
     },
   };
 
+  // Only in the frame: outside it a styled page follows the system setting through its own CSS.
+  // The link sits before the bridge on an html page, but after it on a rendered markdown page, so
+  // this runs again once the document has loaded.
+  const applyTheme = () => {
+    if (!framed || !document.querySelector('link[data-aa-style]')) return;
+    document.documentElement?.setAttribute('data-aa-theme', runtime.theme);
+  };
+
   const setTheme = (theme) => {
     if ((theme !== 'light' && theme !== 'dark') || theme === runtime.theme) return;
     runtime.theme = theme;
+    applyTheme();
     for (const cb of themeListeners) {
       try {
         cb(theme);
@@ -153,6 +164,8 @@
     return;
   }
   setTimeout(settle, PORT_WAIT_MS);
+  applyTheme();
+  whenLoaded(applyTheme);
 
   const onPortMessage = (event) => {
     const data = event.data;
