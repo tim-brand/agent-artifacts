@@ -201,7 +201,6 @@ body {
 h1,
 h2,
 h3 {
-  margin: 0;
   line-height: 1.25;
 }
 h1 {
@@ -209,9 +208,6 @@ h1 {
 }
 h2 {
   font-size: var(--text-lg);
-}
-p {
-  margin: 0;
 }
 a {
   color: var(--accent);
@@ -235,6 +231,11 @@ code {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
+}
+/* In a stack or a row the gap spaces things, so their own margins go; a plain document keeps them. */
+.stack > *,
+.row > * {
+  margin: 0;
 }
 .card {
   background: var(--surface);
