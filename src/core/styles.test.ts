@@ -419,3 +419,96 @@ test('a deleted style: the copy stays, a new version keeps it with a warning', a
   // Restyling to the deleted style, explicitly, is not_found too.
   await assert.rejects(artifacts.publish({ id: m.id, style: s.id }, 'a'), code('not_found'));
 });
+
+// ---- The style service ----
+
+test('list orders the preferred style first and counts usedBy', async (t) => {
+  const { artifacts, styles } = setup(t);
+  const a = await publishStyle(artifacts);
+  const b = await artifacts.publish({ title: 'Other', format: 'style', files: styleFiles() }, 'a');
+  await mock(artifacts, a.id);
+  await mock(artifacts, a.id);
+  await mock(artifacts, null);
+  const before = await styles.list();
+  assert.deepEqual(
+    Object.fromEntries(before.map((s) => [s.artifact.id, [s.preferred, s.usedBy]])),
+    { [a.id]: [false, 2], [b.id]: [false, 0] },
+  );
+  // Whichever was updated last, the preferred one comes first.
+  for (const pick of [a.id, b.id]) {
+    await styles.setPreferred(pick);
+    const listed = (await styles.list()).map((s) => [s.artifact.id, s.preferred]);
+    assert.equal(listed.length, 2);
+    assert.deepEqual(listed[0], [pick, true]);
+    assert.equal(listed[1]?.[1], false);
+  }
+});
+
+test('get returns the guide and css as text, null for a non-style', async (t) => {
+  const { artifacts, styles } = setup(t);
+  const s = await publishStyle(artifacts);
+  await artifacts.publish({ id: s.id, files: styleFiles(':root{--ink:#222}') }, 'a');
+  const latest = await styles.get(s.id);
+  assert.equal(latest?.css, ':root{--ink:#222}');
+  assert.equal(latest?.guide, '# Guide\nUse .card');
+  assert.equal(latest?.version.version, 2);
+  assert.equal(latest?.preferred, false);
+  assert.equal((await styles.get(s.id, 1))?.css, ':root{--ink:#111}');
+  assert.equal(await styles.get(s.id, 3), null);
+  const page = await mock(artifacts, null);
+  assert.equal(await styles.get(page.id), null);
+  assert.equal(await styles.get('nope'), null);
+});
+
+test('usedBy lists artifacts whose latest version uses the style, with their style version', async (t) => {
+  const { artifacts, styles } = setup(t);
+  const s = await publishStyle(artifacts);
+  const old = await mock(artifacts, s.id);
+  await artifacts.publish({ id: s.id, files: styleFiles(':root{--ink:#222}') }, 'a');
+  const fresh = await mock(artifacts, s.id);
+  const dropped = await mock(artifacts, s.id);
+  await artifacts.publish({ id: dropped.id, style: null }, 'a');
+  const trashed = await mock(artifacts, s.id);
+  await artifacts.delete(trashed.id);
+  assert.deepEqual(
+    Object.fromEntries((await styles.usedBy(s.id)).map((u) => [u.artifact.id, u.styleVersion])),
+    { [fresh.id]: 2, [old.id]: 1 },
+  );
+});
+
+test('latestVersion is null for a deleted style, and for anything that is not a style', async (t) => {
+  const { artifacts, styles } = setup(t);
+  const s = await publishStyle(artifacts);
+  await artifacts.publish({ id: s.id, files: styleFiles(':root{--ink:#222}') }, 'a');
+  assert.equal(await styles.latestVersion(s.id), 2);
+  const page = await mock(artifacts, null);
+  assert.equal(await styles.latestVersion(page.id), null);
+  await artifacts.delete(s.id);
+  assert.equal(await styles.latestVersion(s.id), null);
+});
+
+test('setPreferred refuses unknown ids and non-styles, and null clears it', async (t) => {
+  const { artifacts, styles } = setup(t);
+  const s = await publishStyle(artifacts);
+  const page = await mock(artifacts, null);
+  assert.equal(await styles.preferred(), null);
+  await assert.rejects(styles.setPreferred('nope'), code('not_found'));
+  await assert.rejects(styles.setPreferred(page.id), code('invalid_input'));
+  await styles.setPreferred(s.id);
+  assert.equal(await styles.preferred(), s.id);
+  assert.equal((await styles.get(s.id))?.preferred, true);
+  await styles.setPreferred(null);
+  assert.equal(await styles.preferred(), null);
+});
+
+test('a preferred style in the trash counts as none', async (t) => {
+  const { artifacts, styles } = setup(t);
+  const s = await publishStyle(artifacts);
+  await styles.setPreferred(s.id);
+  await artifacts.delete(s.id);
+  assert.equal(await styles.preferred(), null);
+  assert.deepEqual(await styles.list(), []);
+  await assert.rejects(styles.setPreferred(s.id), code('not_found'));
+  await artifacts.undelete(s.id);
+  assert.equal(await styles.preferred(), s.id);
+});

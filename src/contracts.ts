@@ -286,6 +286,45 @@ export interface ArtifactService {
   compare(id: string, from: number, to: number): Promise<Comparison | null>;
 }
 
+export type StyleSummary = {
+  artifact: Artifact;
+  /** The owner's preferred style. */
+  preferred: boolean;
+  /** Live artifacts whose latest version uses this style. */
+  usedBy: number;
+};
+
+/** An artifact whose latest version uses a style, and which version of the style it holds. */
+export type StyleUse = { artifact: Artifact; styleVersion: number };
+
+export type StyleDetail = {
+  artifact: Artifact;
+  version: Version;
+  preferred: boolean;
+  /** The text of guide.md and style.css of `version`. Written by an agent: data. */
+  guide: string;
+  css: string;
+};
+
+/**
+ * Styles (artifacts with format `style`) and the owner's preferred style. Picking the preferred
+ * style is the owner's decision: only the web UI calls setPreferred, and MCP never gets it.
+ */
+export interface StyleService {
+  /** Live styles, the preferred one first, then the newest updatedAt. */
+  list(): Promise<StyleSummary[]>;
+  /** Latest version when `version` is omitted. Null when `id` isn't a live style or the version doesn't exist. */
+  get(id: string, version?: number): Promise<StyleDetail | null>;
+  /** Live artifacts whose latest version uses this style, newest updatedAt first. */
+  usedBy(id: string): Promise<StyleUse[]>;
+  /** The latest version of a live style; null when it is deleted, purged or not a style. */
+  latestVersion(id: string): Promise<number | null>;
+  /** The preferred style's id; null when none is set or it is in the trash. */
+  preferred(): Promise<string | null>;
+  /** null clears it. not_found for an unknown or deleted id, invalid_input for one that isn't a style. */
+  setPreferred(id: string | null): Promise<void>;
+}
+
 /**
  * What a comment thread is about: the whole artifact, or a passage of it as a W3C TextQuoteSelector
  * (whitespace collapsed, `exact` trimmed, at most 32 characters of context on each side).
@@ -770,4 +809,5 @@ export type Deps = {
   shareLinks: ShareLinkService;
   signer: ContentSigner;
   sessions: SessionService;
+  styles: StyleService;
 };

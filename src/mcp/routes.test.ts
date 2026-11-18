@@ -262,6 +262,7 @@ function setup(
     },
     signer: { url: () => '', verify: () => false },
     sessions: {} as Deps['sessions'],
+    styles: {} as Deps['styles'],
   };
   const app = new Hono();
   app.route('/mcp', createMcpRoutes(deps));

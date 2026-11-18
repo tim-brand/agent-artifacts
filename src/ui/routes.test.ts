@@ -417,6 +417,7 @@ function fakeDeps(overrides: {
     shareLinks,
     signer,
     sessions,
+    styles: {} as Deps['styles'],
   };
   return {
     app: createUiRoutes(deps),

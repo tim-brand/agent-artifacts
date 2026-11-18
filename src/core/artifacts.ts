@@ -61,7 +61,7 @@ type FileRow = {
   sha256: string;
 };
 
-const toArtifact = (row: ArtifactRow): Artifact => ({
+export const toArtifact = (row: ArtifactRow): Artifact => ({
   id: row.id,
   title: row.title,
   description: row.description,

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { TRASH_DAYS } from '../contracts.ts';
 import { transaction } from './db.ts';
+import { PREFERRED_STYLE } from './styles.ts';
 
 const HOUR = 60 * 60 * 1000;
 /** Blobs younger than this are kept even when unreferenced: their publish may still be running. */
@@ -23,6 +24,10 @@ export function createPurge(db: DatabaseSync, blobsDir: string) {
   const deleteVersions = db.prepare('DELETE FROM versions WHERE artifact_id = ?');
   // Share links, threads, comments and live page data go with it: ON DELETE CASCADE.
   const deleteArtifact = db.prepare('DELETE FROM artifacts WHERE id = ?');
+  // A preferred style that is deleted for good is no longer preferred.
+  const deletePreferred = db.prepare(
+    `DELETE FROM settings WHERE key = '${PREFERRED_STYLE}' AND value = ?`,
+  );
   const referenced = db.prepare('SELECT DISTINCT sha256 FROM version_files');
 
   return async function purge(now = Date.now()): Promise<PurgeResult> {
@@ -34,6 +39,7 @@ export function createPurge(db: DatabaseSync, blobsDir: string) {
         deleteFiles.run(id);
         deleteVersions.run(id);
         deleteArtifact.run(id);
+        deletePreferred.run(id);
       }
       return ids.length;
     });

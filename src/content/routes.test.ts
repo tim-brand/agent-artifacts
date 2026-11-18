@@ -184,6 +184,7 @@ const deps = {
   comments: {} as Deps['comments'],
   data: {} as Deps['data'],
   sessions: {} as Deps['sessions'],
+  styles: {} as Deps['styles'],
 } satisfies Deps;
 
 const app = createContentRoutes(deps);
