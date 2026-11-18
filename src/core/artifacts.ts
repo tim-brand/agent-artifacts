@@ -10,6 +10,9 @@ import {
   type Format,
   LIMITS,
   type PublishInput,
+  STYLE,
+  STYLED_FORMATS,
+  type StyleRef,
   type Version,
 } from '../contracts.ts';
 import type { BlobStore } from './blobs.ts';
@@ -20,10 +23,11 @@ import { hasContent, prepareVersion } from './files.ts';
 import { now, randomId } from './ids.ts';
 import { createLibrary } from './library.ts';
 import { createSearchIndex } from './search.ts';
+import { attachStyle, isStylePath, latestStyleFiles } from './styles.ts';
 
 const EDITABLE: readonly Format[] = ['html', 'markdown', 'code', 'style'];
 
-type NewVersion = { entry: string; format: Format; files: FileInfo[] };
+type NewVersion = { entry: string; format: Format; files: FileInfo[]; style?: StyleRef | null };
 
 export type ArtifactRow = {
   id: string;
@@ -160,16 +164,16 @@ export function createArtifactService(
   const stmt = {
     artifact: db.prepare('SELECT * FROM artifacts WHERE id = ? AND deleted_at IS NULL'),
     insertArtifact: db.prepare(
-      `INSERT INTO artifacts (id, title, description, format, latest_version, capabilities, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO artifacts (id, title, description, format, latest_version, capabilities, style_id,
+       created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ),
     updateArtifact: db.prepare(
       `UPDATE artifacts SET title = ?, description = ?, format = ?, latest_version = ?, capabilities = ?,
-       updated_at = ? WHERE id = ?`,
+       style_id = ?, updated_at = ? WHERE id = ?`,
     ),
     insertVersion: db.prepare(
       `INSERT INTO versions (artifact_id, version, entry, format, published_by, created_at,
-       lines_added, lines_removed) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       lines_added, lines_removed, style_id, style_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ),
     entryFile: db.prepare(
       `SELECT v.format, f.sha256, f.content_type FROM versions v
@@ -242,7 +246,19 @@ export function createArtifactService(
   const insertVersion = (id: string, version: number, v: NewVersion, by: string, time: string) => {
     const counts = countsFor(id, version - 1, v);
     const { added = null, removed = null } = counts ?? {};
-    stmt.insertVersion.run(id, version, v.entry, v.format, by, time, added, removed);
+    const style = v.style ?? null;
+    stmt.insertVersion.run(
+      id,
+      version,
+      v.entry,
+      v.format,
+      by,
+      time,
+      added,
+      removed,
+      style?.id ?? null,
+      style?.version ?? null,
+    );
     for (const f of v.files) {
       stmt.insertFile.run(id, version, f.path, f.size, f.contentType, f.sha256);
     }
@@ -275,6 +291,89 @@ export function createArtifactService(
       format,
       files: files.map((f) => (f.path === entry.path ? replaced : f)),
     };
+  };
+
+  /** The latest version's entry, format and files, for a restyle. */
+  const latestFiles = (artifact: ArtifactRow): NewVersion => {
+    const latest = stmt.version.get(artifact.id, artifact.latest_version) as VersionRow;
+    const files = (stmt.files.all(artifact.id, latest.version) as FileRow[]).map(toFile);
+    return { entry: latest.entry, format: latest.format as Format, files };
+  };
+
+  /**
+   * The style rules of a publish, inside its transaction. `next` has the version's own files;
+   * `carried` says they came from the previous version (edits or a restyle), so a copy of its style
+   * under _style/ is among them. The target style is `requested` when given, else the artifact's
+   * own, and the version gets its latest version. `unchanged`: a restyle that would change nothing.
+   */
+  const withStyle = (
+    existing: ArtifactRow | undefined,
+    next: NewVersion,
+    requested: string | null | undefined,
+    carried: boolean,
+    restyle: boolean,
+  ): { version: NewVersion; target: string | null; warning?: string } | 'unchanged' => {
+    const previous = existing
+      ? (stmt.version.get(existing.id, existing.latest_version) as VersionRow)
+      : undefined;
+    const target = requested !== undefined ? requested : (existing?.style_id ?? null);
+    const own =
+      carried && previous?.style_id ? next.files.filter((f) => !isStylePath(f.path)) : next.files;
+    if (target === null) {
+      if (restyle && !previous?.style_id) return 'unchanged';
+      return { version: { ...next, files: own, style: null }, target };
+    }
+    if (next.format === 'style') throw new AppError('invalid_input', "A style can't use a style");
+    if (!STYLED_FORMATS.includes(next.format)) {
+      const remove = requested === undefined ? '; pass style: null to remove it' : '';
+      throw new AppError(
+        'invalid_input',
+        `Only html and markdown artifacts can use a style, not ${next.format}${remove}`,
+      );
+    }
+    if (!carried && own.some((f) => isStylePath(f.path))) {
+      throw new AppError(
+        'invalid_input',
+        `With a style, your own files can't be under ${STYLE.dir}/: that folder holds the style`,
+      );
+    }
+    const found = findArtifact(target);
+    if (found && found.format !== 'style') {
+      throw new AppError('invalid_input', `Artifact ${target} is not a style`);
+    }
+    const latest = found ? latestStyleFiles(db, target) : null;
+    let files: FileInfo[];
+    let style: StyleRef;
+    let warning: string | undefined;
+    if (latest) {
+      const same = previous?.style_id === target && previous.style_version === latest.version;
+      if (restyle && same) return 'unchanged';
+      files = attachStyle(own, latest.files);
+      style = { id: target, version: latest.version };
+    } else if (
+      existing &&
+      previous &&
+      requested === undefined &&
+      previous.style_id === target &&
+      previous.style_version
+    ) {
+      // The artifact's own style was deleted: keep the copy that the previous version holds.
+      const copy = (stmt.files.all(existing.id, previous.version) as FileRow[])
+        .map(toFile)
+        .filter((f) => isStylePath(f.path));
+      files = [...own, ...copy];
+      style = { id: target, version: previous.style_version };
+      warning = `Style ${target} is deleted; kept the copy from v${previous.version}`;
+    } else {
+      throw new AppError('not_found', `Style ${target} not found`, { id: target });
+    }
+    if (files.length > LIMITS.files) {
+      throw new AppError(
+        'too_large',
+        `At most ${LIMITS.files} files per version, the style's files under ${STYLE.dir}/ included`,
+      );
+    }
+    return { version: { ...next, files, style }, target, warning };
   };
 
   return {
@@ -336,12 +435,11 @@ export function createArtifactService(
         }
 
         const id = existing?.id ?? randomId();
-        const next = edits && existing ? editLatest(existing, edits) : stored;
-        const version = next
-          ? (existing?.latest_version ?? 0) + 1
-          : (existing?.latest_version ?? 0);
-        const newTitle = title ?? existing?.title ?? '';
-        const format = next?.format ?? (existing?.format as Format);
+        const edited = edits && existing ? editLatest(existing, edits) : null;
+        // `style` alone (no content, files or edits) restyles: the same own files, a new version.
+        const restyle = !edited && !stored && existing !== undefined && input.style !== undefined;
+        const own = edited ?? stored ?? (restyle && existing ? latestFiles(existing) : null);
+        const format = own?.format ?? (existing?.format as Format);
         if (existing && (existing.format === 'style') !== (format === 'style')) {
           throw new AppError(
             'invalid_input',
@@ -356,6 +454,18 @@ export function createArtifactService(
         }
         const caps = JSON.stringify(kept);
 
+        const styled = own
+          ? withStyle(existing, own, input.style, Boolean(edited) || restyle, restyle)
+          : null;
+        const made = styled && styled !== 'unchanged' ? styled : null;
+        const next = made?.version ?? null;
+        const styleId = made ? made.target : (existing?.style_id ?? null);
+        const warning = made?.warning;
+        const version = next
+          ? (existing?.latest_version ?? 0) + 1
+          : (existing?.latest_version ?? 0);
+        const newTitle = title ?? existing?.title ?? '';
+
         if (existing) {
           stmt.updateArtifact.run(
             newTitle,
@@ -363,6 +473,7 @@ export function createArtifactService(
             format,
             version,
             caps,
+            styleId,
             time,
             id,
           );
@@ -374,13 +485,20 @@ export function createArtifactService(
             format,
             version,
             caps,
+            styleId,
             time,
             time,
           );
         }
         if (next) insertVersion(id, version, next, publishedBy, time);
         index.reindexArtifact(id);
-        return { id, version, title: newTitle, url: `${appOrigin}/a/${id}` };
+        return {
+          id,
+          version,
+          title: newTitle,
+          url: `${appOrigin}/a/${id}`,
+          ...(warning ? { warning } : {}),
+        };
       });
     },
 
@@ -408,6 +526,8 @@ export function createArtifactService(
           old.format,
           next,
           existing.capabilities,
+          // The old version's style comes back with it, as it was.
+          old.style_id,
           time,
           id,
         );
@@ -421,6 +541,8 @@ export function createArtifactService(
           time,
           counts?.added ?? null,
           counts?.removed ?? null,
+          old.style_id,
+          old.style_version,
         );
         stmt.copyFiles.run(next, id, version);
         index.reindexArtifact(id);
